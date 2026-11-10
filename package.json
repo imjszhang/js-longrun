@@ -1,0 +1,53 @@
+{
+  "name": "js-longrun",
+  "version": "0.1.0-alpha.1",
+  "description": "Persistent long-running task orchestration, review and settlement for js-superagent.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "bin": {
+    "js-longrun": "bin/js-longrun.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./definitions": "./src/core/definitions.mjs",
+    "./runtime": "./src/core/runtime.mjs",
+    "./trial": "./src/core/trial.mjs",
+    "./project": "./src/project.mjs",
+    "./superagent": "./src/superagent.mjs",
+    "./types": "./src/types/index.mjs",
+    "./types/*": "./src/types/*.mjs",
+    "./lock": "./src/lock.mjs",
+    "./cli": "./src/cli.mjs"
+  },
+  "files": [
+    "src",
+    "bin",
+    "templates",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "peerDependencies": {
+    "js-superagent": "^0.14.0-alpha.0"
+  },
+  "devDependencies": {
+    "js-superagent": "0.14.0-alpha.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/check-package.mjs && npm test",
+    "test:package": "node scripts/pack-smoke.mjs",
+    "prepack": "node scripts/check-package.mjs",
+    "release:prepare": "npm run check && npm run test:package"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
