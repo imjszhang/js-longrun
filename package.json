@@ -1,6 +1,6 @@
 {
   "name": "js-longrun",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "Persistent long-running task orchestration, review and settlement for js-superagent.",
   "type": "module",
   "license": "MIT",
@@ -33,21 +33,30 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "peerDependencies": {
-    "js-superagent": "^0.14.0-alpha.0"
+    "js-superagent": "^0.14.0-alpha.1"
   },
   "devDependencies": {
-    "js-superagent": "0.14.0-alpha.0"
+    "js-superagent": "0.14.0-alpha.1"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "check": "node scripts/check-package.mjs && npm test",
     "test:package": "node scripts/pack-smoke.mjs",
     "prepack": "node scripts/check-package.mjs",
-    "release:prepare": "npm run check && npm run test:package"
+    "release:prepare": "npm run check && npm run test:package && npm run release:pack",
+    "release:pack": "node scripts/prepare-release.mjs"
   },
   "publishConfig": {
     "access": "public",
     "tag": "alpha",
     "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjszhang/js-longrun.git"
+  },
+  "homepage": "https://github.com/imjszhang/js-longrun#readme",
+  "bugs": {
+    "url": "https://github.com/imjszhang/js-longrun/issues"
   }
 }

@@ -5,3 +5,14 @@ assert.equal(p.name,'js-longrun');assert.equal(p.license,'MIT');assert.equal(p.p
 for(const file of [p.bin['js-longrun'],...Object.values(p.exports).filter(x=>!x.includes('*')),'LICENSE','README.md'])assert.ok(fs.existsSync(new URL('../'+file,import.meta.url)),file);
 assert.ok(!p.dependencies?.['js-agent-runtime']);
 console.log('Package entries and release metadata verified');
+const lock=JSON.parse(fs.readFileSync(new URL('../package-lock.json',import.meta.url)));
+assert.equal(lock.version,p.version);assert.equal(lock.packages[''].version,p.version);
+assert.equal(lock.packages[''].license,p.license);
+assert.match(p.version,/^\d+\.\d+\.\d+-alpha\.\d+$/);
+assert.equal(p.repository.url,'git+https://github.com/imjszhang/js-longrun.git');
+assert.equal(p.publishConfig.registry,'https://registry.npmjs.org/');assert.equal(p.publishConfig.access,'public');
+assert.equal(p.peerDependencies['js-superagent'],'^0.14.0-alpha.1');
+assert.equal(p.devDependencies['js-superagent'],'0.14.0-alpha.1');
+assert.equal(lock.packages['node_modules/js-superagent'].version,p.devDependencies['js-superagent']);
+for(const hook of ['install','preinstall','postinstall','prepare'])assert.ok(!p.scripts[hook],`Consumer lifecycle hook: ${hook}`);
+if(process.env.RELEASE_TAG)assert.equal(process.env.RELEASE_TAG,`v${p.version}`);

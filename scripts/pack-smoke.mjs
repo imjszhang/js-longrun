@@ -46,7 +46,7 @@ try {
 
   const consumer = join(scratch, 'consumer'); mkdirSync(consumer);
   writeFileSync(join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
-  run(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--registry=https://registry.npmjs.org/', tarball, 'js-superagent@0.14.0-alpha.0'], consumer);
+  run(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--registry=https://registry.npmjs.org/', tarball, 'js-superagent@' + sourceManifest.devDependencies['js-superagent']], consumer);
   const installedRoot = join(consumer, 'node_modules/js-longrun');
   const installed = JSON.parse(readFileSync(join(installedRoot, 'package.json'), 'utf8'));
   assert.equal(installed.version, sourceManifest.version);

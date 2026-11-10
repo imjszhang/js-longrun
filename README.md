@@ -2,7 +2,7 @@
 
 Persistent, bounded rounds of work for a long-term project goal. js-longrun decides when a task may run, freezes its inputs, submits work to js-superagent, verifies review evidence and applies results to the owning project.
 
-**Status: `0.1.0-alpha.1`, local npm candidate; not published.** Preparing or installing a tarball does not publish it. This extraction preserves the existing task format and execution model; it does not introduce a new cloud service.
+**Status: `0.1.0-alpha.2`, local npm candidate; not published.** Preparing or installing a tarball does not publish it. This extraction preserves the existing task format and execution model; it does not introduce a new cloud service.
 
 ## Responsibilities
 
@@ -23,12 +23,12 @@ npm run check
 npm pack
 
 # In the consuming project, use the produced tarball:
-npm install --save-exact /path/to/js-longrun-0.1.0-alpha.1.tgz /path/to/js-superagent-0.14.0-alpha.1.tgz
+npm install --save-exact /path/to/js-longrun-0.1.0-alpha.2.tgz js-superagent@0.14.0-alpha.1
 ```
 
 The package's scripts are authoritative for release checks. Runtime consumers do not need to compile the package. Install optional channel dependencies in the consuming project if its js-superagent deployment needs them, such as the Feishu SDK.
 
-The peer range is `js-superagent@^0.14.0-alpha.0`; SDK and offline package checks still use the published `0.14.0-alpha.0`. Deployments using DSH with managed jobs enabled need the local `js-superagent@0.14.0-alpha.1` repair candidate for built-in longrun tasks. Those tasks disable managed jobs per ticket, and the repair applies that restriction to the DSH executor as well. The repair candidate is not published to npm; prepare its tarball from the js-superagent checkout and install it alongside this package, as above. Updating source files alone does not update a running service.
+The peer range is `js-superagent@^0.14.0-alpha.1`. Tests and clean consumer checks use published `0.14.0-alpha.1`, which fixes per-ticket managed-job restrictions in DSH. Updating source files alone does not update a running service.
 
 ## Create a task without starting it
 
@@ -101,3 +101,5 @@ Text replies do not substitute for structured item decisions. Re-review expiry p
 - [Host integration and migration](docs/integration.md)
 
 MIT license. See [LICENSE](LICENSE).
+
+See [release preparation](docs/releasing.md) for reproducible archives, validation and publication boundaries.

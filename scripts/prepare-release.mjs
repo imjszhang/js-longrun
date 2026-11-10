@@ -1,0 +1,14 @@
+import fs from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
+const root=fileURLToPath(new URL('../',import.meta.url));
+process.chdir(root);
+execFileSync(process.execPath,['scripts/check-package.mjs'],{stdio:'inherit'});
+fs.mkdirSync('release',{recursive:true});
+const [pack]=JSON.parse(execFileSync('npm',['pack','--ignore-scripts','--json','--pack-destination','release'],{encoding:'utf8'}));
+const integrity='sha512-'+createHash('sha512').update(fs.readFileSync('release/'+pack.filename)).digest('base64');
+if(integrity!==pack.integrity)throw Error('Archive integrity mismatch');
+const manifest={name:pack.name,version:pack.version,filename:pack.filename,integrity,size:pack.size,files:pack.files.length,sourceCommit:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),sourceDirty:!!execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),published:false};
+fs.writeFileSync('release/manifest.json',JSON.stringify(manifest,null,2)+'\n');
+console.log(JSON.stringify(manifest,null,2));
