@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0-alpha.2 — Unreleased npm candidate
+## 0.1.0-alpha.2 — Published 2026-11-10
 
 - Require the published js-superagent alpha.1 repair as the minimum peer version and test against it.
 - Add repository metadata, release consistency checks and durable tarball/integrity manifests.

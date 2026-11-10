@@ -14,7 +14,11 @@ This validates metadata and lock consistency, runs unit/integration/CLI tests, c
 Before an explicitly authorized publication, check CI, `npm whoami`, name/version availability and the manifest. Then publish the exact archive:
 
 ```sh
-npm publish release/js-longrun-0.1.0-alpha.2.tgz --access public --tag alpha --registry=https://registry.npmjs.org/
+npm publish ./release/js-longrun-0.1.0-alpha.2.tgz --access public --tag alpha --registry=https://registry.npmjs.org/
 ```
 
 Verify the exact registry version and integrity before reporting success or retrying a network failure. First publications may take several minutes to become available. Inspect actual dist-tags; do not assume npm assigned only alpha. Create the annotated `v0.1.0-alpha.2` tag at the manifest source commit and a GitHub prerelease with the archive and manifest only when publishing is authorized. Finish with a fresh registry consumer CLI/SDK check. Do not store credentials or production task state in the repository or archive.
+
+## Publication record
+
+Version 0.1.0-alpha.2 was published on 2026-11-10 from clean commit `739711635fc714fa52f0c7d871cd5105b2ac68a0`. The annotated tag and GitHub prerelease contain the verified tarball and source manifest. Registry integrity matches the manifest; a fresh registry consumer passed CLI/SDK and offline settlement checks. npm assigned both `alpha` and `latest` on this first publication. It remains an alpha release; prefer the exact version.

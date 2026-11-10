@@ -2,7 +2,7 @@
 
 Persistent, bounded rounds of work for a long-term project goal. js-longrun decides when a task may run, freezes its inputs, submits work to js-superagent, verifies review evidence and applies results to the owning project.
 
-**Status: `0.1.0-alpha.2`, local npm candidate; not published.** Preparing or installing a tarball does not publish it. This extraction preserves the existing task format and execution model; it does not introduce a new cloud service.
+**Status: `0.1.0-alpha.2`, published to npm on 2026-11-10.** Preparing or installing a tarball does not publish it. This extraction preserves the existing task format and execution model; it does not introduce a new cloud service.
 
 ## Responsibilities
 
@@ -22,8 +22,8 @@ npm ci
 npm run check
 npm pack
 
-# In the consuming project, use the produced tarball:
-npm install --save-exact /path/to/js-longrun-0.1.0-alpha.2.tgz js-superagent@0.14.0-alpha.1
+# In the consuming project, install the published versions:
+npm install --save-exact js-longrun@0.1.0-alpha.2 js-superagent@0.14.0-alpha.1
 ```
 
 The package's scripts are authoritative for release checks. Runtime consumers do not need to compile the package. Install optional channel dependencies in the consuming project if its js-superagent deployment needs them, such as the Feishu SDK.
