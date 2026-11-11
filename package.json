@@ -1,6 +1,6 @@
 {
   "name": "js-longrun",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "description": "Persistent long-running task orchestration, review and settlement for js-superagent.",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,7 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "peerDependencies": {
-    "js-superagent": "^0.14.0-alpha.1"
+    "js-superagent": "^0.14.0-alpha.1 || ^0.15.0-alpha.0"
   },
   "devDependencies": {
     "js-superagent": "0.14.0-alpha.1"

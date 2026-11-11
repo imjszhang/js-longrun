@@ -2,7 +2,7 @@
 
 Persistent, bounded rounds of work for a long-term project goal. js-longrun decides when a task may run, freezes its inputs, submits work to js-superagent, verifies review evidence and applies results to the owning project.
 
-**Status: `0.1.0-alpha.2`, published to npm on 2026-11-10.** Preparing or installing a tarball does not publish it. This extraction preserves the existing task format and execution model; it does not introduce a new cloud service.
+**Status: `0.1.0-alpha.3` local candidate; `0.1.0-alpha.2` is the published baseline.** Preparing or installing a tarball does not publish it. Existing task definitions remain compatible. The candidate adds an explicit host adapter contract for frozen project materials; it does not create tasks or enable a scheduler.
 
 ## Responsibilities
 
@@ -28,7 +28,7 @@ npm install --save-exact js-longrun@0.1.0-alpha.2 js-superagent@0.14.0-alpha.1
 
 The package's scripts are authoritative for release checks. Runtime consumers do not need to compile the package. Install optional channel dependencies in the consuming project if its js-superagent deployment needs them, such as the Feishu SDK.
 
-The peer range is `js-superagent@^0.14.0-alpha.1`. Tests and clean consumer checks use published `0.14.0-alpha.1`, which fixes per-ticket managed-job restrictions in DSH. Updating source files alone does not update a running service.
+The peer range is `js-superagent@^0.14.0-alpha.1 || ^0.15.0-alpha.0`. Legacy tasks remain tested against published `0.14.0-alpha.1`. The new frozen material contract requires material capabilities version 1 and schema 15, supplied by the `0.15.0-alpha.0` candidate; unsupported hosts reject it before starting or charging a round. See [host integration](docs/integration.md) for explicit opt-in and candidate tests. Updating source files alone does not update a running service.
 
 ## Create a task without starting it
 

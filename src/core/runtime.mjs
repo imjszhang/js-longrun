@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { withLongrunLock } from '../lock.mjs';
 import { readDefinition, validateDefinition, taskPaths, loadState, saveState, safePath, listTasks } from './definitions.mjs';
 import { getType, prepareTypeContext } from '../types/index.mjs';
+import { freezeMaterialContract, materialSubmission, materialContractErrors, equal } from '../types/common.mjs';
 
 const hash = text => createHash('sha256').update(text).digest('hex');
 const json = value => JSON.stringify(value, null, 2) + '\n';
@@ -81,11 +82,18 @@ export function genericStatus({root,id,now=new Date()}) {
   return {definition:def,state,gates:{ok:!reasons.length,reasons}};
 }
 export async function startRun(options) {return withLongrunLock(options.root,()=>startUnlocked(options));}
-async function startUnlocked({root,id,client,now=new Date(),kind='round',selectedKeys=[]}) {
+async function startUnlocked({root,id,client,now=new Date(),kind='round',selectedKeys=[],materials}) {
   const {state,definition:def,gates}=genericStatus({root,id,now});
   const reasons=gates.reasons.filter(x=>!(kind==='review'&&['not-due','weekly-budget'].includes(x)));
   if(reasons.length)return {action:'hold',taskId:id,reasons};
   const frozen=planTask({root,id,now,kind,selectedKeys});
+  if(materials!==undefined) {
+    try {
+      frozen.executionContract=freezeMaterialContract({root:fs.realpathSync(root),frozen,materials});
+      const capabilities=await client.materialCapabilities?.();
+      if(capabilities?.version!==1||capabilities.schemaVersion!==15||Object.entries(frozen.executionContract.requiredCapabilities).some(([key,value])=>capabilities[key]!==value))throw new Error('js-superagent does not support the required frozen material contract');
+    }catch(error){return {action:'blocked',taskId:id,code:'LONGRUN_MATERIAL_UNSUPPORTED',error:String(error.message??error)};}
+  }
   const base=`research/longrun/${id}/runs/${frozen.runId}`;
   // Frozen run is authoritative for all subsequent collection, even after definition edits.
   write(file(root,`${base}/draft.json`),json(frozen));
@@ -94,10 +102,12 @@ async function startUnlocked({root,id,client,now=new Date(),kind='round',selecte
   state.running={runId:frozen.runId,kind,ticketId:null,phase:'submitting',submittedAt:now.toISOString()};
   saveState(root,state);
   try {
-    const ticket=await client.submit(frozen.plan.text,{attentionSnapshotPaths:frozen.plan.attentionSnapshotPaths,operatorNotifications:def.review.mode==='items',managedJobs:false});
+    const ticket=await client.submit(frozen.plan.text,{attentionSnapshotPaths:frozen.plan.attentionSnapshotPaths,operatorNotifications:def.review.mode==='items',managedJobs:false,
+      ...(frozen.executionContract?{materials:materialSubmission(frozen.executionContract)}:{})});
     if(typeof ticket!=='string'||!ticket)throw new Error('Missing ticket id');
     state.running.ticketId=ticket;state.running.phase='queued';saveState(root,state);
-    write(file(root,`${base}/binding.json`),json({taskId:id,runId:frozen.runId,ticketId:ticket,definitionHash:frozen.definitionHash}));
+    write(file(root,`${base}/binding.json`),json({taskId:id,runId:frozen.runId,ticketId:ticket,definitionHash:frozen.definitionHash,
+      ...(frozen.executionContract?{executionContract:frozen.executionContract,workspaceLineage:[]}:{})}));
     return {action:'opened',taskId:id,ticketId:ticket,runId:frozen.runId};
   } catch(error) {
     // Submission may have succeeded remotely: never silently submit a duplicate.
@@ -141,13 +151,30 @@ async function collectUnlocked({root,id,client,now=new Date()}) {
   if(!frozen||frozen.taskId!==id||frozen.runId!==active.runId)throw new Error('Frozen run identity mismatch');
   const priorOutcome=readJSON(file(root,`${base}/outcome.json`),null);
   if(priorOutcome)return finish(root,id,state,frozen,priorOutcome,new Date(priorOutcome.finishedAt));
+  const binding=readJSON(file(root,`${base}/binding.json`),null);
+  if(binding?.executionContract&&!frozen.executionContract)return {action:'blocked',taskId:id,error:'Frozen execution contract was removed'};
+  if(frozen.executionContract) {
+    const errors=materialContractErrors({frozen,binding});
+    if(binding?.ticketId!==active.ticketId)errors.push('Material ticket binding changed');
+    if(errors.length)return {action:'blocked',taskId:id,error:errors.join('; ')};
+  }
   const transaction=readJSON(file(root,`${base}/settlement.json`),null);
-  if(transaction)return apply(root,id,state,frozen,transaction,now);
+  if(transaction){if(frozen.executionContract&&transaction.contractHash!==frozen.executionContract.hash)return {action:'blocked',taskId:id,error:'Settlement material contract changed'};return apply(root,id,state,frozen,transaction,now);}
   if(!active.ticketId)return {action:'blocked',taskId:id,error:'Submission needs inspection; no bound ticket'};
-  const snapshot=await client.snapshot(active.ticketId);
+  const snapshot=await client.snapshot(active.ticketId,...(frozen.executionContract?[{contractHash:frozen.executionContract.hash}]:[]));
   const age=+now-Date.parse(active.submittedAt), limit=frozen.definition.limits;
+  if(frozen.executionContract&&['queued','preparing','blocked'].includes(snapshot.workspacePreparation?.status)&&snapshot.status!=='cancelled') {
+    // Preparation's synthetic waiting report is not an invitation to collect
+    // business outputs or a new human-review allowance.
+    active.executionSince??=snapshot.workspace?.createdAt??snapshot.workspacePreparation.createdAt??active.submittedAt;
+    if(+now-Date.parse(active.executionSince)>limit.maxExecutionMinutes*60000){await client.cancel(active.ticketId);return finish(root,id,state,frozen,{status:'failed',errors:['Workspace preparation exceeded the original execution deadline']},now);}
+    active.phase='preparing';saveState(root,state);
+    return snapshot.workspacePreparation.status==='blocked'
+      ?{action:'blocked',taskId:id,error:snapshot.workspacePreparation.error?.message??'Workspace preparation needs inspection'}
+      :{action:'pending',taskId:id,ticket:'preparing'};
+  }
   if(snapshot.status==='queued'||snapshot.status==='running'||['failed','interrupted'].includes(snapshot.status)) {
-    if(snapshot.status==='running'&&(active.phase!=='running'||!active.executionSince))active.executionSince=now.toISOString();
+    if(snapshot.status==='running'&&(!['running','preparing'].includes(active.phase)||!active.executionSince))active.executionSince=now.toISOString();
     const timeout=snapshot.status==='queued'?age>limit.queueTimeoutHours*3600000:
       +now-Date.parse(active.executionSince??active.submittedAt)>limit.maxExecutionMinutes*60000;
     if(timeout){await client.cancel(active.ticketId);return finish(root,id,state,frozen,{status:'failed',errors:['Execution or queue timeout']},now);}
@@ -155,9 +182,16 @@ async function collectUnlocked({root,id,client,now=new Date()}) {
   }
   if(snapshot.status==='cancelled')return finish(root,id,state,frozen,{status:'cancelled'},now);
   if(!['waiting','completed'].includes(snapshot.status))return {action:'pending',taskId:id,ticket:snapshot.status};
+  if(frozen.executionContract) {
+    const errors=materialContractErrors({frozen,binding,snapshot});
+    if(errors.length)return {action:'blocked',taskId:id,error:errors.join('; ')};
+    binding.workspaceLineage=[...(snapshot.workspaceHistory??[]).map(item=>item.workspace),snapshot.workspace];
+    write(file(root,`${base}/binding.json`),json(binding));
+  }
   // Use only allowed regular files within this actual ticket workspace.
   const changes=await client.changes(active.ticketId);
   const errors=changes.filter(c=>!frozen.plan.allowedPaths.includes(c.path)).map(c=>`Out-of-scope change: ${c.path}`);
+  if(frozen.executionContract&&!equal(changes,snapshot.workerChanges))errors.push('Worker increment changed during evidence collection');
   if(client.jobs&&(await client.jobs(active.ticketId)).length)errors.push('This execution profile forbids managed jobs');
   let result,memoryOutput;
   try {
@@ -197,7 +231,8 @@ async function collectUnlocked({root,id,client,now=new Date()}) {
     if(error.code==='LONGRUN_CONFLICT')return finish(root,id,state,frozen,{status:'conflict',errors:[error.message]},now);
     throw error;
   }
-  const receipt={schemaVersion:1,key:`${id}:${active.runId}:1`,status:'applying',outcomeStatus:expired?'expired':'settled',summary:plan.summary,writes};
+  const receipt={schemaVersion:1,key:`${id}:${active.runId}:1`,status:'applying',outcomeStatus:expired?'expired':'settled',summary:plan.summary,writes,
+    ...(frozen.executionContract?{contractHash:frozen.executionContract.hash}:{})};
   write(file(root,`${base}/settlement.json`),json(receipt));
   active.phase='applying';saveState(root,state);
   return apply(root,id,state,frozen,receipt,now);

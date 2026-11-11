@@ -174,6 +174,106 @@ test('submission ambiguity blocks retry rather than enqueueing duplicate tickets
   assert.equal((await f.collect()).action, 'blocked');
 });
 
+function materialFixture(f) {
+  const source={root:fs.realpathSync(f.root),projectId:'fixture-project',instanceId:'fixture-instance',entryId:'inputs',view:{kind:'current'}};
+  const materials={sources:[{id:'inputs',snapshotId:'frozen-inputs',digest:'a'.repeat(64),source}]};
+  let submitted;
+  const submit=f.client.submit, snapshot=f.client.snapshot;
+  f.client.materialCapabilities=async()=>({version:1,boundedReadsVersion:1,workspacePreparationVersion:1,localApplicationVersion:1,schemaVersion:15});
+  f.client.submit=async(text,options)=>{submitted=options;return submit(text,options);};
+  const workspace={state:'ready',mode:'copy',path:f.workspace,projectRoot:source.root,ticketId:`ticket-${f.id}-1`,
+    snapshotOrigin:'project-materials',materialSnapshotDigest:materials.sources[0].digest,materialSource:source,
+    sourceSnapshotDigest:'b'.repeat(64),provisionId:'provision-0',preparationId:'initial-material-copy'};
+  const evidence={workspace,workspaceHistory:[],workspacePreparation:null};
+  f.client.snapshot=async(...args)=>({...await snapshot(...args),...structuredClone(evidence),
+    materialBinding:{...submitted.materials,sources:[{id:'inputs',view:{kind:'snapshot',snapshotId:'frozen-inputs'},project:{root:source.root,projectId:source.projectId,instanceId:source.instanceId}}]},
+    workerChanges:await f.client.changes()});
+  return {materials,evidence,submitted:()=>submitted};
+}
+
+test('unsupported material contract is rejected before draft, budget reservation or submission', async t => {
+  const f=await fixture(t), m=materialFixture(f), before=fs.readFileSync(taskPaths(f.root,f.id).state,'utf8');
+  f.client.materialCapabilities=async()=>({version:1,schemaVersion:14});
+  const result=await f.start(day(0),{materials:m.materials});
+  assert.equal(result.action,'blocked');assert.equal(result.code,'LONGRUN_MATERIAL_UNSUPPORTED');
+  assert.equal(f.submissions(),0);assert.equal(loadState(f.root,f.id).round,0);
+  assert.equal(fs.readFileSync(taskPaths(f.root,f.id).state,'utf8'),before);
+  assert.equal(fs.existsSync(path.join(taskPaths(f.root,f.id).runs,'R0001/draft.json')),false);
+});
+
+test('explicit frozen materials retain the original inputs and only longrun settles artifacts', async t => {
+  const f=await fixture(t), m=materialFixture(f);
+  assert.equal((await f.start(day(0),{materials:m.materials})).action,'opened');
+  const contract=f.plan().executionContract;
+  assert.equal(contract.profile,'frozen-project-materials@1');assert.equal(f.plan().definition.executionProfile,'local-worker@1');
+  assert.equal(m.submitted().materials.owner.kind,'longrun');assert.equal(m.submitted().materials.owner.contractHash,contract.hash);
+  assert.equal(m.submitted().materials.allowApply,false);assert.equal(m.submitted().materials.workspaceSourceId,'inputs');
+  assert.equal(m.submitted().managedJobs,false);
+  fs.writeFileSync(path.join(f.root,'source.md'),'Changed after freezing'); f.writeResult();
+  const result=await f.collect();assert.equal(result.record.status,'settled');
+  assert.equal(fs.readFileSync(path.join(f.root,'source.md'),'utf8'),'Changed after freezing');
+  const receipt=JSON.parse(fs.readFileSync(path.join(taskPaths(f.root,f.id).runs,'R0001/settlement.json'),'utf8'));
+  assert.equal(receipt.contractHash,contract.hash);
+  assert.equal((await f.collect()).action,'none');
+});
+
+test('material preparation lineage may advance under the same frozen contract', async t => {
+  const f=await fixture(t), m=materialFixture(f);await f.start(day(0),{materials:m.materials});f.writeResult();
+  const previous=structuredClone(m.evidence.workspace);
+  m.evidence.workspace={...previous,generation:1,previousProvisionId:previous.provisionId,provisionId:'provision-1',preparationId:'prepare-1'};
+  m.evidence.workspaceHistory=[{preparationId:'prepare-1',workspace:previous}];
+  m.evidence.workspacePreparation={id:'prepare-1',status:'ready',materialId:'inputs',previousProvisionId:previous.provisionId,workspace:m.evidence.workspace};
+  assert.equal((await f.collect()).record.status,'settled');
+  const binding=JSON.parse(fs.readFileSync(path.join(taskPaths(f.root,f.id).runs,'R0001/binding.json'),'utf8'));
+  assert.equal(binding.workspaceLineage.length,2);assert.equal(binding.workspaceLineage[1].generation,1);
+});
+
+test('preparation waiting is not business collection and retains the original execution deadline', async t => {
+  const f=await fixture(t), m=materialFixture(f);await f.start(day(0),{materials:m.materials});
+  const state=loadState(f.root,f.id);state.running.executionSince=day(0).toISOString();state.running.phase='running';saveState(f.root,state);
+  f.status('waiting');m.evidence.workspacePreparation={status:'queued',createdAt:new Date(+day(0)+1000).toISOString()};
+  const pending=await f.collect(new Date(+day(0)+2000));
+  assert.equal(pending.action,'pending');assert.equal(pending.ticket,'preparing');assert.equal(f.cancellations(),0);
+  assert.equal(loadState(f.root,f.id).running.executionSince,day(0).toISOString());
+  m.evidence.workspacePreparation.status='ready';f.status('running');
+  assert.equal((await f.collect(new Date(+day(0)+3000))).action,'pending');
+  assert.equal(loadState(f.root,f.id).running.executionSince,day(0).toISOString());
+  m.evidence.workspacePreparation.status='blocked';f.status('waiting');
+  const expired=await f.collect(new Date(+day(0)+61*60000));
+  assert.equal(expired.record.status,'failed');assert.equal(f.cancellations(),1);
+  assert.equal(loadState(f.root,f.id).round,1);
+});
+
+test('new material contract blocks missing workspace and material evidence instead of falling back to root', async t => {
+  const f=await fixture(t), m=materialFixture(f);await f.start(day(0),{materials:m.materials});f.writeResult();
+  const previous=m.evidence.workspace;m.evidence.workspace=null;
+  let result=await f.collect();assert.equal(result.action,'blocked');assert.match(result.error,/workspace/);
+  assert.equal(loadState(f.root,f.id).running.ticketId,`ticket-${f.id}-1`);
+  assert.deepEqual(fs.readdirSync(taskPaths(f.root,f.id).artifacts),[]);
+  m.evidence.workspace={...previous,generation:2,previousProvisionId:'unknown'};
+  result=await f.collect();assert.equal(result.action,'blocked');assert.match(result.error,/lineage/);
+  m.evidence.workspace={...previous,materialSnapshotDigest:'c'.repeat(64)};
+  result=await f.collect();assert.equal(result.action,'blocked');assert.match(result.error,/lineage/);
+});
+
+test('new material contract keeps unknown submission ownership and rejects live/cross-project widening', async t => {
+  const f=await fixture(t), m=materialFixture(f);
+  const other=structuredClone(m.materials);other.sources[0].source.root='/another/project';
+  assert.equal((await f.start(day(0),{materials:other})).action,'blocked');assert.equal(f.submissions(),0);
+  f.client.submit=async()=>{throw new Error('unknown after submission');};
+  assert.equal((await f.start(day(0),{materials:m.materials})).action,'blocked');
+  assert.equal(loadState(f.root,f.id).running.phase,'needs_attention');
+  assert.equal((await f.start(day(0),{materials:m.materials})).action,'hold');
+});
+
+test('material source and output contract tampering blocks settlement without resetting round ownership', async t => {
+  const f=await fixture(t), m=materialFixture(f);await f.start(day(0),{materials:m.materials});f.writeResult();
+  const draftFile=path.join(taskPaths(f.root,f.id).runs,'R0001/draft.json'), frozen=f.plan();
+  frozen.inputs[0].content='Changed frozen input';fs.writeFileSync(draftFile,json(frozen));
+  const result=await f.collect();assert.equal(result.action,'blocked');assert.match(result.error,/contract changed/);
+  assert.equal(loadState(f.root,f.id).round,1);assert.equal(f.submissions(),1);
+});
+
 test('waiting time does not consume resumed execution timeout', async t => {
   const f = await fixture(t); await f.start();
   // Simulate the durable waiting checkpoint; no report-mode attention is fabricated.

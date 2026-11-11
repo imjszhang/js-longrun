@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.3 — Unreleased candidate
+
+- Add explicit host opt-in for a same-project frozen material snapshot, with a distinct `frozen-project-materials@1` contract and native snapshot-copy workspace selection.
+- Check capabilities before creating a draft, reserving a round or submitting. Unknown submission outcomes retain their existing recovery ownership.
+- Bind frozen inputs, output scope, limits, review rules and artifact baseline. Verify the material identity, complete workspace generation lineage and Worker increment before collection; missing evidence never falls back to the project directory.
+- Recognize host preparation waiting before result collection, without cancelling a valid preparation or resetting its execution deadline.
+- Keep longrun as the only formal artifact writer and preserve existing review, deadline, cancellation, budget and settlement behavior. Legacy `local-worker@1` tasks and published 0.14 peers remain compatible.
+- Verify the new SDK path in an isolated fixture through initial snapshot copy, re-preparation, source changes after freezing and idempotent longrun settlement.
+
 ## 0.1.0-alpha.2 — Published 2026-11-10
 
 - Require the published js-superagent alpha.1 repair as the minimum peer version and test against it.
