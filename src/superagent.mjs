@@ -27,16 +27,32 @@ export function serviceClient({ projectRoot, open } = {}) {
     }
   }
   return {
+    materialCapabilities: () => withProject(runtime => {
+      if (typeof runtime.materialCapabilities !== 'function') throw Object.assign(new Error('js-superagent does not support the frozen material contract'), { code: 'LONGRUN_MATERIAL_UNSUPPORTED' });
+      return runtime.materialCapabilities();
+    }),
+    createMaterialSnapshot: options => withProject(runtime => {
+      if (typeof runtime.createMaterialSnapshot !== 'function') throw Object.assign(new Error('js-superagent cannot freeze project materials'), { code: 'LONGRUN_MATERIAL_UNSUPPORTED' });
+      return runtime.createMaterialSnapshot(options);
+    }),
     submit: (text, options = {}) => withProject(runtime => runtime.submit({ text,
       ...(options.operatorNotifications === undefined ? {} : { operatorNotifications: options.operatorNotifications }),
       ...(options.managedJobs === undefined ? {} : { managedJobs: options.managedJobs }),
       ...(options.attentionSnapshotPaths?.length ? { attentionSnapshotPaths: options.attentionSnapshotPaths } : {}),
+      ...(options.materials === undefined ? {} : { materials: structuredClone(options.materials) }),
     }).id),
-    snapshot: id => withProject(runtime => {
+    snapshot: (id, options = {}) => withProject(runtime => {
       const view = runtime.get(id);
       const report = runtime.getDomainTicket(id).assignments.at(-1)?.report ?? null;
+      const detail = typeof runtime.getDetailed === 'function' ? runtime.getDetailed(id) : null;
+      const workspace = runtime.getWorkspace(id), strict = !!(options.contractHash || detail?.materialBinding);
+      const inspection = strict && workspace ? runtime.inspectWorkspace(id) : null;
+      if (inspection?.workspace && inspection.workspace.provisionId !== workspace.provisionId) throw new Error('Workspace changed during material evidence collection');
       return { status: view.status, report: report?.state ?? null, summary: report?.summary ?? null,
-        workspacePath: runtime.getWorkspace(id)?.path ?? root,
+        workspacePath: workspace?.path ?? (strict ? null : root),
+        ...(strict ? { workspace: workspace ?? null, materialBinding: detail?.materialBinding ?? null,
+          workspacePreparation: detail?.workspacePreparation ?? null, workspaceHistory: detail?.workspaceHistory ?? [],
+          materialObservations: detail?.materialObservations ?? [], workerChanges: inspection?.changes ?? null } : {}),
         answers: runtime.listAnswers(id), attentionSnapshots: runtime.listAttentionSnapshots(id) };
     }),
     changes: id => withProject(runtime => runtime.inspectWorkspace(id).changes),

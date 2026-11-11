@@ -54,3 +54,21 @@ test('observer closes once without starting execution or channel listeners', asy
   await client.close(); await client.close();
   assert.equal(opens, 1); assert.equal(stops, 1); assert.equal(closes, 1);
 });
+
+test('material adapter forwards only explicit frozen contract and does not fall back to project root', async t => {
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'longrun-material-adapter-')));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  let submitted;
+  const capabilities={version:1,boundedReadsVersion:1,workspacePreparationVersion:1,localApplicationVersion:1,schemaVersion:15};
+  const materials={version:1,access:'native',workspaceSourceId:'inputs',sources:[{id:'inputs',view:{kind:'snapshot',snapshotId:'snap-1'}}],allowPreparation:true,allowApply:false,owner:{kind:'longrun',contractHash:'a'.repeat(64)}};
+  const client=serviceClient({projectRoot:root,open:()=>({
+    materialCapabilities:()=>capabilities,createMaterialSnapshot:options=>({id:'snap-1',source:options.sourceId}),
+    submit:options=>{submitted=options;return{id:'ticket'};},get:()=>({status:'queued'}),getDomainTicket:()=>({assignments:[]}),
+    getWorkspace:()=>null,getDetailed:()=>({materialBinding:materials}),listAnswers:()=>[],listAttentionSnapshots:()=>[],stop(){},close(){},
+  })});
+  assert.deepEqual(await client.materialCapabilities(),capabilities);
+  assert.deepEqual(await client.createMaterialSnapshot({sourceId:'inputs'}),{id:'snap-1',source:'inputs'});
+  await client.submit('frozen task',{materials});assert.deepEqual(submitted.materials,materials);
+  const observed=await client.snapshot('ticket',{contractHash:'a'.repeat(64)});
+  assert.equal(observed.workspacePath,null);assert.equal(observed.workspace,null);assert.equal(observed.workerChanges,null);
+});
