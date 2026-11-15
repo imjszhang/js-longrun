@@ -1,6 +1,6 @@
 # Release preparation
 
-The next candidate is `0.2.0-alpha.0` under the `alpha` tag; `0.1.0-alpha.3` remains the published alpha baseline. The package is MIT licensed and requires Node 22.13+. Legacy task contracts support `js-superagent@^0.14.0-alpha.1`; the new material contract additionally supports `^0.15.0-alpha.0` and requires version-1 material capabilities with schema 15. This is an early release, not a stable compatibility promise.
+Version `0.2.0-alpha.0` is published under the `alpha` tag. The package is MIT licensed and requires Node 22.13+. Legacy task contracts support `js-superagent@^0.14.0-alpha.1`; the new material contract additionally supports `^0.15.0-alpha.0` and requires version-1 material capabilities with schema 15. This is an early release, not a stable compatibility promise.
 
 From a clean checkout:
 
@@ -37,3 +37,7 @@ See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) and [np
 Version 0.1.0-alpha.2 was published on 2026-11-10 from clean commit `739711635fc714fa52f0c7d871cd5105b2ac68a0`. The annotated tag and GitHub prerelease contain the verified tarball and source manifest. Registry integrity matches the manifest; a fresh registry consumer passed CLI/SDK and offline settlement checks. npm assigned both `alpha` and `latest` on this first publication. It remains an alpha release; prefer the exact version.
 
 Runtime management must also be tested against the consuming project’s exact superagent version (this candidate targets the verified 0.15.0-alpha.11 integration without changing it). Old peers lacking public health APIs report unavailable. Run service tests with isolated project/runtime homes; do not use production credentials or states. Stop old unmanaged watchers and timers before replacing their entrypoints. Real Feishu card submission and launchd timing require separate authorized deployment evidence; unit tests do not prove them.
+
+### 0.2.0-alpha.0
+
+Published through [GitHub trusted publishing](https://github.com/imjszhang/js-longrun/actions/runs/43711192927) from clean commit `24e49b08fed3c9f552c20cfd93654b9df9ed93d9`. The annotated tag and [prerelease](https://github.com/imjszhang/js-longrun/releases/tag/v0.2.0-alpha.0) retain the exact workflow archive and manifest. Registry integrity, signatures and provenance passed; provenance identifies this commit and publish.yml. Alpha points to this version; historical latest remains 0.1.0-alpha.2. A fresh registry consumer with js-superagent 0.15.0-alpha.11 passed CLI, read-only inspection and offline settlement; an isolated real launchd fallback smoke also passed.
