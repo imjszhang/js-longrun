@@ -20,13 +20,17 @@ JS_LONGRUN_MATERIAL_SDK=/absolute/path/to/candidate/src/index.mjs \
 
 The fixture creates its own temporary `JS_SUPERAGENT_HOME`. It exercises frozen input despite later source edits, initial copy, same-contract workspace generation change, denied superagent artifact application, and longrun-only settlement with duplicate collection. The normal suite verifies rejection before round/budget mutation on unsupported hosts, unknown-submit ownership, missing evidence, out-of-scope outputs, review evidence and recoverable settlement. The candidate test skips when no SDK entrypoint is specified; a release must run it explicitly and record the exact tested package.
 
-Before an explicitly authorized publication, check CI, `npm whoami`, name/version availability and the manifest. Then publish the exact archive:
+## Trusted publishing
 
-```sh
-npm publish ./release/js-longrun-0.2.0-alpha.0.tgz --access public --tag alpha --registry=https://registry.npmjs.org/
-```
+All subsequent npm releases use GitHub trusted publishing, following the js-superagent release model. Do not run local npm publish or ask for per-release browser authorization. Do not fall back to long-lived npm tokens.
 
-Verify the exact registry version and integrity before reporting success or retrying a network failure. First publications may take several minutes to become available. Inspect actual dist-tags; do not assume npm assigned only alpha. Create the annotated `v0.2.0-alpha.0` tag at the manifest source commit and a GitHub prerelease with the archive and manifest only when publishing is authorized. Finish with a fresh registry consumer CLI/SDK check. Do not store credentials or production task state in the repository or archive.
+Dispatch `gh workflow run publish.yml --ref main -f version=0.2.0-alpha.0` only for an authorized release. The macOS preparation job runs release checks; the separate Linux job publishes the verified archive with OIDC and provenance. It validates the clean workflow SHA, package/lock versions and archive integrity. Existing identical versions are verified without republishing; uncertain registry responses never trigger blind retries.
+
+The one-time npm binding is package `js-longrun`, repository `imjszhang/js-longrun`, workflow `publish.yml`, environment `npm`, with direct publish enabled. The GitHub environment allows only main, with no per-release reviewer or wait timer. Configuring this binding can require one-time account verification. Normal pushes do not publish.
+
+After success, download the same run's `npm-release-candidate` artifact, verify registry integrity and provenance, create the annotated version tag at its source commit and a GitHub prerelease with archive and manifest, then verify a clean registry consumer. Preserve historical latest; publish prereleases to alpha.
+
+See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) and [npm trust](https://docs.npmjs.com/cli/v11/commands/npm-trust/).
 
 ## Publication record
 
