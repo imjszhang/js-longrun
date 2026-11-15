@@ -14,7 +14,23 @@ const observer = watchServiceClient({ projectRoot });
 // The observer provides observe/watchChanges and must be closed during shutdown.
 ```
 
-The adapter uses the public js-superagent SDK to submit, read, answer, reply and cancel tickets. It does not start another worker scheduler or Feishu listener. Generic tasks pass their frozen snapshot paths and capability restrictions when submitting a ticket.
+The adapter uses the public js-superagent SDK to submit, read, answer, reply and cancel tickets. It does not start another worker scheduler or Feishu listener. Generic tasks pass their frozen snapshot paths and capability restrictions when submitting a ticket. Both operational clients initialize the SDK runtime, which may initialize, migrate or recover its state. They are not strictly read-only diagnostics. The longrun service manager reads its own observations and the existing public superagent service/identity inspection APIs instead; no superagent change is required.
+
+## Project layout
+
+An optional `longrun.config.json` in the consuming project selects the generic task root:
+
+```json
+{ "schemaVersion": 1, "tasksDir": "automation/tasks" }
+```
+
+Without this file the root remains `research/longrun`. `resolveLayout(root)` from `js-longrun/layout` resolves the same configuration used by CLI, SDK, scheduler, collector and trial. It performs no initialization. `root` always identifies the consuming project and its superagent state, not the task directory. Task definitions cannot override this configuration or load routes.
+
+The first mutating operation binds the chosen layout in the fixed project control directory. A changed/missing configuration that disagrees with that binding fails explicitly. Selecting a new root while the old default directory contains tasks also fails; it must not silently create another registry or budget. This release supports choosing a root for a new project, not relocating existing tasks. Do not delete the binding to bypass that check. Task paths are project-relative and reject traversal, symlinks and overlap with control files or dependency directories. Selecting a root does not grant material access or expand Worker write permission.
+
+Each operation captures its resolved layout across asynchronous calls. New runs also freeze `taskBase`, `runBase` and `artifactBase` in their draft and binding; these paths participate in new material contract hashes. Collection and interrupted settlement use the frozen paths. Older runs without layout metadata retain their legacy paths and original hashes; no draft rewrite is needed. Input paths remain relative to the project root and retain their original bytes and SHA-256 evidence.
+
+Machine runtime files have a separate resolver, `resolveRuntimeLayout({ projectRoot, runtimeHome })` from `js-longrun/service-runtime`. Trials use this machine directory, with an independent project ledger and Worker workspace. Existing task state, evidence, outcomes, memory and quotas remain in the configured task root. See [operation](operation.md) for the control-lock compatibility boundary.
 
 ## Explicit frozen project materials
 
@@ -41,12 +57,16 @@ After an interrupted operation, inspect the bound ticket and its durable operati
 Custom pipeline rules stay in the consumer. A project can provide route functions to `tickProject` and `startProjectWatcher`:
 
 - `list(root)` enumerates built-in and business-owned instances.
+- `registryDirectories(root)` returns project-relative directories to watch for registry changes (default: the configured task root).
+- `instanceDirectory(root, row)` returns the project-relative instance directory to watch (default: `<tasksDir>/<row.id>`). A host with legacy paths must supply these explicitly instead of assuming its business routes also change filesystem subscriptions.
 - `load(root, row)` loads the matching state format.
 - `tick({ root, row, client, now, open })` and `collect(...)` delegate to the owning engine.
 - `canOpen({ root, row, state })` supplies eligibility for a custom state format; actual business gates remain in its engine.
 - `preserveInitial({ root, row, state, view })` can recognize an already-frozen waiting review on watcher startup, preserving legacy state byte-for-byte.
 - `afterCollect({ root, row, result })` refreshes consumer views after watcher collection; retry is independent from settlement.
 - `onStart({ root })` repairs derived consumer views when the watcher starts. Failures retry independently and do not block collection. This closes the restart gap when settlement was saved but a view refresh failed before shutdown.
+
+Watcher options `onReady` and `onActivity` expose observations for the owning service manager. `onReady` fires after a successful initial catch-up and startup repair; the existing `watcher.ready` promise only means that the first attempt has ended and may resolve even when retryable errors occurred. Activity records distinguish a check, its success/failure, a durable collection and a follow-up view error. Observations do not authorize new work or become another task database.
 
 Every custom engine must use the same package lock and preserve ticket/output identity checks. Routes are code explicitly supplied by the host, not code loaded from task JSON.
 

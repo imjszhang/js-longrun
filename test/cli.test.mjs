@@ -11,13 +11,15 @@ const cli = fileURLToPath(new URL('../bin/js-longrun.mjs', import.meta.url));
 const version = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url))).version;
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'js-longrun-cli-')));
+  const runtimeHome = `${root}-runtime`;
   const unrelated = path.join(root, 'elsewhere'); fs.mkdirSync(unrelated);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(runtimeHome, { recursive: true, force: true }));
   const run = (...args) => spawnSync(process.execPath, [cli, ...args], {
     cwd: unrelated, encoding: 'utf8', timeout: 15000,
-    env: { ...process.env, JS_SUPERAGENT_HOME: path.join(root, '.service-home'), JS_SUPERAGENT_MACHINE_DIRECTORY: path.join(root, '.machine') },
+    env: { ...process.env, JS_LONGRUN_HOME: runtimeHome, JS_SUPERAGENT_HOME: path.join(root, '.service-home'), JS_SUPERAGENT_MACHINE_DIRECTORY: path.join(root, '.machine') },
   });
-  return { root, unrelated, run };
+  return { root, unrelated, run, runtimeHome };
 }
 function ok(result) { assert.equal(result.status, 0, result.stderr); return result.stdout; }
 
@@ -66,11 +68,12 @@ test('create, plan, offline trial and control commands remain rooted at the sele
   assert.deepEqual(fs.readdirSync(f.unrelated), []);
 });
 
-test('host CLI injection retains custom routes and always passes the consuming project to its SDK adapter', async () => {
+test('host CLI injection retains custom routes and always passes the consuming project to its SDK adapter', async t => {
   const output = [], routes = { list: () => [] }, events = [];
-  const root = '/explicit/consumer';
+  const { root } = fixture(t);
   const handled = await handleGenericCommand({ root, command: 'tick', flags: new Map(), routes, print: value => output.push(value),
     dependencies: {
+      recordManagedTick: ({ run }) => run(),
       serviceClient(options) { assert.equal(options.projectRoot, root); return { identity: 'client' }; },
       async tickProject(options) { assert.equal(options.root, root); assert.equal(options.routes, routes); assert.equal(options.client.identity, 'client'); return [{ taskId: 'business', action: 'collected' }]; },
     }, afterTick: rows => events.push(rows[0].taskId),
@@ -80,4 +83,46 @@ test('host CLI injection retains custom routes and always passes the consuming p
   const types = [];
   await handleGenericCommand({ root, command: 'types', additionalTypes: [{ id: 'host@1', creatable: false }], print: value => types.push(value) });
   assert.equal(types[0][0].id, 'host@1');
+});
+
+test('service status and health are read-only on an uninstalled project', t => {
+  const f = fixture(t), before = fs.readdirSync(f.root);
+  for (const action of ['status', 'health']) {
+    const status = JSON.parse(ok(f.run('--project', f.root, 'service', action)));
+    assert.equal(typeof status, 'object');
+  }
+  assert.deepEqual(fs.readdirSync(f.root), before);
+  assert.equal(fs.existsSync(f.runtimeHome), false);
+  assert.equal(fs.existsSync(path.join(f.root, '.service-home')), false);
+});
+
+test('host service commands retain the registered business entrypoint without opening an SDK client', async () => {
+  const calls = [], root = '/consumer', entrypoint = '/consumer/business.mjs';
+  await handleGenericCommand({ root, command: 'service', taskId: 'status',
+    serviceOptions: { entrypoint, entryArgs: [] }, print: value => calls.push(value),
+    dependencies: {
+      createLongrunServiceManager(options) { assert.deepEqual(options, { projectRoot: root, entrypoint, entryArgs: [] }); return { status: () => ({ installed: false }) }; },
+      serviceClient() { throw new Error('status must not open execution runtime'); },
+    },
+  });
+  assert.deepEqual(calls, [{ installed: false }]);
+});
+
+test('fatal observer error during startup closes the acquired watcher and client once', async t => {
+  const { root } = fixture(t), outputs = [];
+  let collectorCloses = 0, observerCloses = 0;
+  const beforeExit = process.exitCode;
+  t.after(() => { process.exitCode = beforeExit; });
+  await handleGenericCommand({ root, command: 'watch', print: value => outputs.push(value),
+    dependencies: {
+      watchServiceClient() { return { close: async () => { observerCloses++; } }; },
+      startProjectWatcher({ onError }) {
+        onError(Object.assign(new Error('synthetic fatal startup'), { code: 'WATCH_FAILED' }));
+        return { ready: Promise.resolve(), close: async () => { collectorCloses++; } };
+      },
+      async runManagedWatcher({ start }) { return start({ onReady() {}, onActivity() {}, onError() {} }); },
+    },
+  });
+  assert.equal(collectorCloses, 1); assert.equal(observerCloses, 1);
+  assert.deepEqual(outputs, []); assert.equal(process.exitCode, 1);
 });

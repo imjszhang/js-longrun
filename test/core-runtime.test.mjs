@@ -11,10 +11,11 @@ const day = n => new Date(Date.parse('2026-11-09T00:00:00Z') + n * 86400000);
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const hash = value => createHash('sha256').update(value).digest('hex');
 
-async function fixture(t, { id = 'report', type = 'change-report@1', mutateDefinition, enabled = true } = {}) {
+async function fixture(t, { id = 'report', type = 'change-report@1', mutateDefinition, enabled = true, tasksDir = 'research/longrun' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'longrun-generic-'));
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'longrun-generic-worker-'));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(workspace, { recursive: true, force: true }); });
+  if (tasksDir !== 'research/longrun') fs.writeFileSync(path.join(root, 'longrun.config.json'), json({schemaVersion:1,tasksDir}));
   fs.writeFileSync(path.join(root, 'source.md'), '# Source\nA frozen fact.\n');
   const definition = defaultDefinition(id, type); definition.inputs = ['source.md']; mutateDefinition?.(definition);
   await createTask({ root, id, brief: '# Analyze local source\nReport changes only.', definition, now: day(0) });
@@ -29,7 +30,7 @@ async function fixture(t, { id = 'report', type = 'change-report@1', mutateDefin
   const draftPath = () => path.join(taskPaths(root, id).runs, loadState(root, id).running?.runId ?? 'R0001', 'draft.json');
   const plan = () => JSON.parse(fs.readFileSync(draftPath(), 'utf8'));
   const writeResult = (result = { schemaVersion: 1, summary: 'New evidence', report: '# Report\nA frozen fact.', evidence: [{ path: 'source.md', quote: 'A frozen fact.' }], changed: true }, memory = '# Memory\nA frozen fact.\n') => {
-    const p = plan(), relative = `research/longrun/${id}/runs/${p.runId}`;
+    const p = plan(), relative = p.layout?.runBase ?? `research/longrun/${id}/runs/${p.runId}`;
     fs.mkdirSync(path.join(workspace, relative), { recursive: true });
     fs.writeFileSync(path.join(workspace, relative, 'result.json'), json(result));
     fs.writeFileSync(path.join(workspace, relative, 'memory.md'), memory);
@@ -399,4 +400,89 @@ test('re-review binds each original run evidence even after source revisions and
   const saved = JSON.parse(fs.readFileSync(path.join(taskPaths(f.root, f.id).artifacts, 'items.json')));
   assert.deepEqual(saved.map(row => `${row.runId}:${row.id}`), ['R0001:I0001', 'R0002:I0001']);
   assert.ok(saved.every(row => row.status === 'adopted'));
+});
+
+test('custom layout report freezes output paths and resumes partial settlement exactly once', async t => {
+  const f = await fixture(t, { tasksDir: 'automation/tasks' });
+  await f.start(); f.writeResult();
+  assert.equal(f.plan().layout.runBase, 'automation/tasks/report/runs/R0001');
+  assert.ok(f.plan().plan.allowedPaths.every(value => value.startsWith('automation/tasks/report/runs/R0001/')));
+  const target = path.join(taskPaths(f.root, f.id).artifacts, 'memory.md'), rename = fs.renameSync;
+  fs.renameSync = (from, to) => { if (to === target) throw new Error('custom apply interruption'); return rename(from, to); };
+  try { await assert.rejects(f.collect(), /custom apply interruption/); }
+  finally { fs.renameSync = rename; }
+  assert.equal(loadState(f.root, f.id).running.phase, 'applying');
+  assert.equal((await f.collect()).record.status, 'settled');
+  assert.equal((await f.collect()).action, 'none');
+  assert.equal(loadState(f.root, f.id).week.runs, 1);
+  assert.equal(fs.existsSync(path.join(f.root, 'research/longrun')), false);
+  assert.equal(verifyGeneric({ root: f.root, id: f.id }).ok, true);
+});
+
+test('custom review and rereview retain original inputs, answer evidence and unaffected items', async t => {
+  const f = await fixture(t, { type: 'review-items@1', tasksDir: 'automation/tasks' });
+  await f.start(); const rows = reviewRows(); f.writeResult({ schemaVersion: 1, items: rows });
+  const review = reviewSnapshot(f, rows);
+  assert.equal((await f.collect()).action, 'awaiting_review');
+  review.complete(rows.map(row => ({ ...row, status: 'later', reason: 'Consider later' })));
+  assert.equal((await f.collect()).record.status, 'settled');
+  const paths = taskPaths(f.root, f.id), before = JSON.parse(fs.readFileSync(path.join(paths.artifacts, 'items.json')));
+  const originalDraft = fs.readFileSync(path.join(paths.runs, 'R0001/draft.json'));
+  const originalBinding = fs.readFileSync(path.join(paths.runs, 'R0001/binding.json'));
+  fs.rmSync(path.join(f.root, 'source.md'));
+  assert.equal((await f.start(day(1), { kind: 'review', selectedKeys: ['R0001:I0001'] })).runId, 'RV0001');
+  assert.equal(f.plan().sourceInputs.R0001[0].sha256, hash('# Source\nA frozen fact.\n'));
+  const selected = f.plan().selectedItems.map(({ reason, ...row }) => ({ ...row, status: 'pending' }));
+  const memory = fs.readFileSync(path.join(paths.artifacts, 'memory.md'), 'utf8');
+  f.writeResult({ schemaVersion: 1, items: selected }, memory);
+  const second = reviewSnapshot(f, selected, { at: day(1), attentionId: 'custom-rereview' });
+  second.complete(selected.map(row => ({ ...row, status: 'adopted', reason: 'Useful now' })), { memory: memory + '\nReviewed original fact.' });
+  assert.equal((await f.collect(day(1))).record.status, 'settled');
+  const after = JSON.parse(fs.readFileSync(path.join(paths.artifacts, 'items.json')));
+  assert.equal(after[0].status, 'adopted'); assert.deepEqual(after[1], before[1]);
+  assert.deepEqual(fs.readFileSync(path.join(paths.runs, 'R0001/draft.json')), originalDraft);
+  assert.deepEqual(fs.readFileSync(path.join(paths.runs, 'R0001/binding.json')), originalBinding);
+  assert.equal(fs.existsSync(path.join(f.root, 'research/longrun')), false);
+});
+
+test('layout editing during submission cannot redirect an in-flight operation or create another budget', async t => {
+  const f = await fixture(t, { tasksDir: 'automation/tasks' });
+  f.client.submit = async () => {
+    fs.writeFileSync(path.join(f.root, 'longrun.config.json'), json({ schemaVersion: 1, tasksDir: 'changed/tasks' }));
+    await Promise.resolve(); return 'same-ticket';
+  };
+  assert.equal((await f.start()).action, 'opened');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'automation/tasks/report/state.json'))).running.ticketId, 'same-ticket');
+  assert.equal(fs.existsSync(path.join(f.root, 'changed')), false);
+  await assert.rejects(async () => f.start(), /LONGRUN_LAYOUT_CONFLICT/);
+  await assert.rejects(async () => f.collect(), /LONGRUN_LAYOUT_CONFLICT/);
+  fs.writeFileSync(path.join(f.root, 'longrun.config.json'), json({ schemaVersion: 1, tasksDir: 'automation/tasks' }));
+  assert.equal(loadState(f.root, f.id).round, 1);
+});
+
+test('legacy drafts without layout fields collect without rewriting their draft or binding', async t => {
+  const f = await fixture(t); await f.start(); f.writeResult();
+  const base = path.join(taskPaths(f.root, f.id).runs, 'R0001');
+  for (const name of ['draft.json', 'binding.json']) {
+    const value = JSON.parse(fs.readFileSync(path.join(base, name))); delete value.layout;
+    fs.writeFileSync(path.join(base, name), json(value));
+  }
+  const draft = fs.readFileSync(path.join(base, 'draft.json')), binding = fs.readFileSync(path.join(base, 'binding.json'));
+  assert.equal((await f.collect()).record.status, 'settled');
+  assert.deepEqual(fs.readFileSync(path.join(base, 'draft.json')), draft);
+  assert.deepEqual(fs.readFileSync(path.join(base, 'binding.json')), binding);
+});
+
+test('new frozen layout metadata cannot be removed or redirected while its ticket is bound', async t => {
+  const f = await fixture(t, { tasksDir: 'automation/tasks' }); await f.start(); f.writeResult();
+  const draftPath = path.join(taskPaths(f.root, f.id).runs, 'R0001/draft.json'), frozen = f.plan();
+  const bindingPath = path.join(taskPaths(f.root, f.id).runs, 'R0001/binding.json'), binding = JSON.parse(fs.readFileSync(bindingPath));
+  delete binding.layout; fs.writeFileSync(bindingPath, json(binding));
+  const blocked = await f.collect();
+  assert.equal(blocked.action, 'blocked'); assert.match(blocked.error, /layout binding/);
+  fs.writeFileSync(bindingPath, json({ ...binding, layout: frozen.layout }));
+  delete frozen.layout; fs.writeFileSync(draftPath, json(frozen));
+  await assert.rejects(f.collect(), /layout differs/);
+  assert.equal(loadState(f.root, f.id).running.ticketId, `ticket-${f.id}-1`);
+  assert.deepEqual(fs.readdirSync(taskPaths(f.root, f.id).artifacts), []);
 });

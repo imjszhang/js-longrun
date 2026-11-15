@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.1.0-alpha.3 — Unreleased candidate
+## 0.2.0-alpha.0 — Unreleased candidate
+
+- Configure a project-relative task root through one validated layout, freeze paths in new runs, and retain legacy contract hashes and recoverable settlement.
+- Add independent machine runtime storage, macOS management for one watcher plus one periodic tick, ownership-checked stop/restart and project-anchored singleton locks.
+- Provide read-only deployment/health inspection without opening the execution runtime, bounded logs, watch observations and tick completion records.
+- Preserve host routes and explicit watcher directories, task enablement, original operation locks and all existing superagent interfaces.
+- Keep active SQLite connections reachable until release, preventing garbage collection from dropping a live asynchronous operation or startup lease.
+- Add custom-layout lifecycle/recovery, service concurrency/ownership, CLI and clean-package consumer tests, plus an opt-in real launchd missed-event fallback smoke.
+
+## 0.1.0-alpha.3 — Published alpha
 
 - Add explicit host opt-in for a same-project frozen material snapshot, with a distinct `frozen-project-materials@1` contract and native snapshot-copy workspace selection.
 - Check capabilities before creating a draft, reserving a round or submitting. Unknown submission outcomes retain their existing recovery ownership.

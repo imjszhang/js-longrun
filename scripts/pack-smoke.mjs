@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,8 +10,8 @@ import { spawnSync } from 'node:child_process';
 // isolated from the operator's projects. This never starts a Worker or channel.
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const sourceManifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
-const scratch = mkdtempSync(join(tmpdir(), 'js-longrun-pack-'));
-const env = { ...process.env, JS_SUPERAGENT_HOME: join(scratch, 'service-home'), JS_SUPERAGENT_MACHINE_DIRECTORY: join(scratch, 'machine') };
+const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'js-longrun-pack-')));
+const env = { ...process.env, JS_LONGRUN_HOME: join(scratch, 'longrun-home'), JS_SUPERAGENT_HOME: join(scratch, 'service-home'), JS_SUPERAGENT_MACHINE_DIRECTORY: join(scratch, 'machine') };
 delete env.LONGRUN_OPEN_ROUNDS;
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 function run(command, args, cwd = scratch) {
@@ -61,6 +61,9 @@ try {
 
   const id = 'local-report';
   const command = (...args) => JSON.parse(run(process.execPath, [cli, '--project', project, ...args], consumer));
+  command('service', 'status'); command('service', 'health');
+  assert.deepEqual(readdirSync(project), [], 'service inspection must not create project state');
+  assert.equal(existsSync(env.JS_LONGRUN_HOME), false, 'service inspection must not create machine state');
   const created = command('create', id, '--type', 'change-report@1', '--goal', 'Summarize supplied local notes.');
   assert.equal(created.state.control, 'draft');
   assert.equal(command('validate', id).ok, true);
@@ -80,7 +83,7 @@ try {
     import assert from 'node:assert/strict';
     import * as sdk from 'js-longrun';
     import { loadState } from 'js-longrun/definitions';
-    for (const name of ['definitions','runtime','trial','project','superagent','types','types/review-items','lock','cli']) {
+    for (const name of ['definitions','runtime','trial','project','superagent','types','types/review-items','lock','cli','layout','service','service-runtime']) {
       const entry = await import('js-longrun/' + name);
       assert.ok(Object.keys(entry).length, 'empty public entry: ' + name);
     }

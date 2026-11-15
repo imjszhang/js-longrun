@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { withLongrunLock } from '../lock.mjs';
+import { assertRelative, safePath, resolveLayout, withTaskLayout, bindTaskLayout } from '../layout.mjs';
+export { safePath } from '../layout.mjs';
 
 export const TASK_TYPES = ['change-report@1', 'review-items@1'];
 const CONTROLS = ['draft', 'enabled', 'paused', 'disabled'];
@@ -11,39 +13,15 @@ export function assertTaskId(id) {
   if (typeof id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(id)) throw new Error('任务 ID 只能使用小写字母、数字和连字符，且以字母开头，最多 64 字符');
   return id;
 }
-function assertRelative(value) {
-  if (typeof value !== 'string' || !value || path.isAbsolute(value) || value.includes('\\') || value.includes('\0') || value.split('/').some(part => !part || part === '.' || part === '..')) {
-    throw new Error(`不安全的项目内路径：${String(value)}`);
-  }
-  return value;
-}
-/** Resolve only repository-relative files. Reject symlinks, even internal ones. */
-export function safePath(root, relative, { allowMissing = true } = {}) {
-  assertRelative(relative);
-  const base = fs.realpathSync(root), parts = relative.split('/');
-  let current = base;
-  for (let index = 0; index < parts.length; index++) {
-    current = path.join(current, parts[index]);
-    let stat;
-    try { stat = fs.lstatSync(current); }
-    catch (error) {
-      if (error.code !== 'ENOENT' || !allowMissing) throw error;
-      continue;
-    }
-    if (stat.isSymbolicLink()) throw new Error(`路径不能经过符号链接：${relative}`);
-    if (index < parts.length - 1 && !stat.isDirectory()) throw new Error(`路径父级不是目录：${relative}`);
-  }
-  return current;
-}
 export function taskPaths(root, id) {
   assertTaskId(id);
-  const relative = `research/longrun/${id}`;
+  const relative = `${resolveLayout(root).tasksDir}/${id}`;
   return Object.fromEntries([
     ['dir', relative], ['definition', `${relative}/task.json`], ['brief', `${relative}/task.md`],
     ['state', `${relative}/state.json`], ['runs', `${relative}/runs`], ['artifacts', `${relative}/artifacts`],
   ].map(([key, value]) => [key, safePath(root, value)]));
 }
-function registryPath(root) { return safePath(root, 'research/longrun/registry.json'); }
+function registryPath(root) { return resolveLayout(root).registryPath; }
 function readRegistry(root) {
   const file = registryPath(root);
   if (!fs.existsSync(file)) return { schemaVersion: 1, tasks: [] };
@@ -170,7 +148,8 @@ export function saveState(root, state) {
   return state;
 }
 
-export async function createTask({ root, id, type = 'change-report@1', brief, definition, now = new Date() }) {
+export function createTask(options) { return withTaskLayout(options.root, () => createTaskInLayout(options)); }
+async function createTaskInLayout({ root, id, type = 'change-report@1', brief, definition, now = new Date() }) {
   assertTaskId(id);
   const d = checkedDefinition(structuredClone(definition ?? defaultDefinition(id, type)), id);
   if (typeof brief !== 'string' || !brief.trim()) throw new Error('需要非空的任务说明 brief');
@@ -178,9 +157,10 @@ export async function createTask({ root, id, type = 'change-report@1', brief, de
   safePath(root, 'working/longrun/control-lock.sqlite3');
   return withLongrunLock(root, () => {
     const paths = taskPaths(root, id), registry = readRegistry(root);
+    bindTaskLayout(root);
     if (registry.tasks.includes(id) || fs.existsSync(paths.dir)) throw new Error(`任务 ${id} 已存在，不能覆盖`);
     const state = initialState(id, now, d.trigger.timezone);
-    const staging = safePath(root, `research/longrun/.create-${id}-${randomUUID()}`);
+    const staging = safePath(root, `${resolveLayout(root).tasksDir}/.create-${id}-${randomUUID()}`);
     let renamed = false;
     try {
       fs.mkdirSync(staging, { recursive: true });
@@ -213,11 +193,13 @@ export function listTasks(root) {
   return rows;
 }
 
-async function changeControl({ root, id, reason, now = new Date() }, target) {
+function changeControl(options, target) { return withTaskLayout(options.root, () => changeControlInLayout(options, target)); }
+async function changeControlInLayout({ root, id, reason, now = new Date() }, target) {
   assertTaskId(id);
   safePath(root, 'working/longrun/control-lock.sqlite3');
   return withLongrunLock(root, () => {
     if (!readRegistry(root).tasks.includes(id)) throw new Error(`任务 ${id} 尚未注册`);
+    bindTaskLayout(root);
     const state = loadState(root, id);
     let definition;
     if (target === 'enabled') {

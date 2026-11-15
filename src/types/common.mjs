@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { frozenRunLayout } from '../layout.mjs';
 
 export const OPTIONS = ['adopted', 'rejected', 'later'];
 export const DECISION_OPTIONS = [{ id: 'adopted', label: '采纳' }, { id: 'rejected', label: '拒绝' }, { id: 'later', label: '稍后' }];
@@ -21,7 +22,7 @@ function frozenFacts(frozen) {
   return { taskId: frozen.taskId, runId: frozen.runId, definitionHash: sha256(json(frozen.definition)),
     inputHash: contractHash({ kind: frozen.kind, inputs: frozen.inputs, memory: frozen.memory, brief: frozen.brief,
       previousItems: frozen.previousItems, selectedItems: frozen.selectedItems, sourceInputs: frozen.sourceInputs }),
-    outputHash: contractHash({ plan: frozen.plan, baseline: frozen.baseline }),
+    outputHash: contractHash({ plan: frozen.plan, baseline: frozen.baseline, ...(frozen.layout ? { layout: frozen.layout } : {}) }),
     capabilityHash: contractHash({ limits: frozen.definition.limits, review: frozen.definition.review,
       executionProfile: frozen.definition.executionProfile, managedJobs: false, outputOwner: 'longrun' }) };
 }
@@ -86,9 +87,9 @@ export function materialContractErrors({ frozen, binding, snapshot }) {
   return errors;
 }
 
-export function outputPaths({ taskId, runId }) {
+export function outputPaths({ taskId, runId, layout }) {
   if (!/^[a-z][a-z0-9-]{0,63}$/.test(taskId ?? '') || !/^(?:R|RV)\d{4,}$/.test(runId ?? '')) throw new Error('Invalid task/run identity');
-  const base = `research/longrun/${taskId}/runs/${runId}`;
+  const base = frozenRunLayout({ taskId, runId, layout }).runBase;
   return { base, result: `${base}/result.json`, memory: `${base}/memory.md` };
 }
 

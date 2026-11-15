@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { withLongrunLock } from '../lock.mjs';
+import { resolveLayout, withTaskLayout, bindTaskLayout, freezeRunLayout, frozenRunLayout } from '../layout.mjs';
 import { readDefinition, validateDefinition, taskPaths, loadState, saveState, safePath, listTasks } from './definitions.mjs';
 import { getType, prepareTypeContext } from '../types/index.mjs';
 import { freezeMaterialContract, materialSubmission, materialContractErrors, equal } from '../types/common.mjs';
@@ -34,7 +35,7 @@ function definition(root,id) {
   return value;
 }
 function artifacts(root,id) {
-  const base=`research/longrun/${id}/artifacts`;
+  const base=`${resolveLayout(root).tasksDir}/${id}/artifacts`;
   const names=new Set();
   const walk=(relative='')=>{const dir=file(root,relative?`${base}/${relative}`:base);if(!fs.existsSync(dir))return;for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const name=relative?`${relative}/${entry.name}`:entry.name;file(root,`${base}/${name}`);if(entry.isDirectory())walk(name);else names.add(name);}};walk();
   const files=Object.fromEntries([...names].map(name=>[name,read(file(root,`${base}/${name}`),null)]));
@@ -50,27 +51,29 @@ function inputs(root, paths) {
     return {path:p,content,sha256:hash(content)};
   });
 }
-export function planTask({root,id,now=new Date(),kind='round',selectedKeys=[]}) {
+export function planTask(options) { return withTaskLayout(options.root, () => planInLayout(options)); }
+function planInLayout({root,id,now=new Date(),kind='round',selectedKeys=[]}) {
   if(!['round','review'].includes(kind))throw new Error('Unknown run kind');
   const def=definition(root,id), p=taskPaths(root,id), state=loadState(root,id);
   const runId=kind==='review'?`RV${String((state.reviewCount??0)+1).padStart(4,'0')}`:`R${String(state.round+1).padStart(4,'0')}`;
   const prior=artifacts(root,id);
   const typeContext=prepareTypeContext({type:def.type,definition:def,kind,files:prior.files,selectedKeys,readInputs:paths=>inputs(root,paths),readOriginalRun:runId=>{
     if(!/^R\d{4,}$/.test(runId))throw new Error('Invalid original run');
-    const original=readJSON(file(root,`research/longrun/${id}/runs/${runId}/draft.json`),null);
+    const original=readJSON(file(root,`${resolveLayout(root).tasksDir}/${id}/runs/${runId}/draft.json`),null);
     if(!original||original.taskId!==id)throw new Error('Missing original source snapshot');
     return original;
   }});
-  const context={definition:def,taskId:id,runId,kind,brief:fs.readFileSync(p.brief,'utf8'),baseline:prior.baseline,...typeContext};
+  const context={definition:def,taskId:id,runId,kind,layout:freezeRunLayout(root,id,runId),brief:fs.readFileSync(p.brief,'utf8'),baseline:prior.baseline,...typeContext};
   const plan=getType(def.type).prepareRun(context);
   for(const output of plan.allowedPaths) {
-    if(!output.startsWith(`research/longrun/${id}/runs/${runId}/`))throw new Error('Execution plan escapes its run');
+    if(!output.startsWith(`${context.layout.runBase}/`))throw new Error('Execution plan escapes its run');
     file(root,output);
   }
   if(plan.attentionSnapshotPaths.some(p=>!plan.allowedPaths.includes(p)))throw new Error('Snapshot path not in output scope');
   return {schemaVersion:1,...context,plan,createdAt:now.toISOString(),definitionHash:hash(json(def))};
 }
-export function genericStatus({root,id,now=new Date()}) {
+export function genericStatus(options) { return withTaskLayout(options.root, () => statusInLayout(options)); }
+function statusInLayout({root,id,now=new Date()}) {
   const def=definition(root,id), state=structuredClone(loadState(root,id));refreshBudget(state,def,now);
   const reasons=[];
   if(!listTasks(root).some(row=>row.id===id))reasons.push('unregistered');
@@ -81,7 +84,7 @@ export function genericStatus({root,id,now=new Date()}) {
   if(state.failures>=2)reasons.push('failures');
   return {definition:def,state,gates:{ok:!reasons.length,reasons}};
 }
-export async function startRun(options) {return withLongrunLock(options.root,()=>startUnlocked(options));}
+export function startRun(options) {return withTaskLayout(options.root,()=>withLongrunLock(options.root,()=>startUnlocked(options)));}
 async function startUnlocked({root,id,client,now=new Date(),kind='round',selectedKeys=[],materials}) {
   const {state,definition:def,gates}=genericStatus({root,id,now});
   const reasons=gates.reasons.filter(x=>!(kind==='review'&&['not-due','weekly-budget'].includes(x)));
@@ -94,7 +97,8 @@ async function startUnlocked({root,id,client,now=new Date(),kind='round',selecte
       if(capabilities?.version!==1||capabilities.schemaVersion!==15||Object.entries(frozen.executionContract.requiredCapabilities).some(([key,value])=>capabilities[key]!==value))throw new Error('js-superagent does not support the required frozen material contract');
     }catch(error){return {action:'blocked',taskId:id,code:'LONGRUN_MATERIAL_UNSUPPORTED',error:String(error.message??error)};}
   }
-  const base=`research/longrun/${id}/runs/${frozen.runId}`;
+  bindTaskLayout(root);
+  const base=frozenRunLayout(frozen).runBase;
   // Frozen run is authoritative for all subsequent collection, even after definition edits.
   write(file(root,`${base}/draft.json`),json(frozen));
   if(kind==='review')state.reviewCount=(state.reviewCount??0)+1;
@@ -106,7 +110,7 @@ async function startUnlocked({root,id,client,now=new Date(),kind='round',selecte
       ...(frozen.executionContract?{materials:materialSubmission(frozen.executionContract)}:{})});
     if(typeof ticket!=='string'||!ticket)throw new Error('Missing ticket id');
     state.running.ticketId=ticket;state.running.phase='queued';saveState(root,state);
-    write(file(root,`${base}/binding.json`),json({taskId:id,runId:frozen.runId,ticketId:ticket,definitionHash:frozen.definitionHash,
+    write(file(root,`${base}/binding.json`),json({taskId:id,runId:frozen.runId,ticketId:ticket,definitionHash:frozen.definitionHash,layout:frozen.layout,
       ...(frozen.executionContract?{executionContract:frozen.executionContract,workspaceLineage:[]}:{})}));
     return {action:'opened',taskId:id,ticketId:ticket,runId:frozen.runId};
   } catch(error) {
@@ -122,7 +126,7 @@ function nextDue(def,now) {
 }
 function finish(root,id,state,frozen,outcome,now) {
   const record={schemaVersion:1,taskId:id,runId:frozen.runId,kind:frozen.kind,ticketId:state.running?.ticketId,status:outcome.status,summary:outcome.summary??'',errors:outcome.errors??[],finishedAt:now.toISOString()};
-  const target=file(root,`research/longrun/${id}/runs/${frozen.runId}/outcome.json`);
+  const target=file(root,`${frozenRunLayout(frozen).runBase}/outcome.json`);
   const existing=readJSON(target,null);if(!existing)write(target,json(record));
   state.running=null;
   if(outcome.status==='settled')state.failures=0;else if(!['expired','cancelled'].includes(outcome.status))state.failures++;
@@ -133,25 +137,29 @@ function finish(root,id,state,frozen,outcome,now) {
 }
 function apply(root,id,state,frozen,transaction,now) {
   for(const change of transaction.writes) {
-    if(!change.path.startsWith(`research/longrun/${id}/artifacts/`))throw new Error('Settlement write outside instance artifacts');
+    if(!change.path.startsWith(`${frozenRunLayout(frozen).artifactBase}/`))throw new Error('Settlement write outside instance artifacts');
     const target=file(root,change.path), current=read(target,null), digest=current===null?null:hash(current);
     if(digest===change.after)continue;
     if(digest!==change.before)throw new Error(`Settlement conflict: ${change.path}`);
     write(target,change.content);
   }
-  transaction.status='applied';write(file(root,`research/longrun/${id}/runs/${frozen.runId}/settlement.json`),json(transaction));
+  transaction.status='applied';write(file(root,`${frozenRunLayout(frozen).runBase}/settlement.json`),json(transaction));
   return finish(root,id,state,frozen,{status:transaction.outcomeStatus??'settled',summary:transaction.summary},now);
 }
-export async function collectTask(options) {return withLongrunLock(options.root,()=>collectUnlocked(options));}
+export function collectTask(options) {return withTaskLayout(options.root,()=>withLongrunLock(options.root,()=>collectUnlocked(options)));}
 async function collectUnlocked({root,id,client,now=new Date()}) {
   const state=loadState(root,id), active=state.running;
   if(!active)return {action:'none',taskId:id};
-  const base=`research/longrun/${id}/runs/${active.runId}`;
+  const base=`${resolveLayout(root).tasksDir}/${id}/runs/${active.runId}`;
   const frozen=readJSON(file(root,`${base}/draft.json`),null);
   if(!frozen||frozen.taskId!==id||frozen.runId!==active.runId)throw new Error('Frozen run identity mismatch');
+  const layout=frozenRunLayout(frozen);
+  if(layout.runBase!==base)throw new Error('Frozen layout differs from the bound task directory');
   const priorOutcome=readJSON(file(root,`${base}/outcome.json`),null);
   if(priorOutcome)return finish(root,id,state,frozen,priorOutcome,new Date(priorOutcome.finishedAt));
   const binding=readJSON(file(root,`${base}/binding.json`),null);
+  if ((frozen.layout || binding?.layout) && (!equal(binding?.layout,frozen.layout) || binding?.taskId!==id || binding?.runId!==active.runId || binding?.ticketId!==active.ticketId)) return {action:'blocked',taskId:id,error:'Frozen layout binding is missing or changed'};
+  bindTaskLayout(root);
   if(binding?.executionContract&&!frozen.executionContract)return {action:'blocked',taskId:id,error:'Frozen execution contract was removed'};
   if(frozen.executionContract) {
     const errors=materialContractErrors({frozen,binding});
@@ -213,7 +221,7 @@ async function collectUnlocked({root,id,client,now=new Date()}) {
     if(!expired){saveState(root,state);return {action:'awaiting_review',taskId:id,runId:active.runId};}
   }
   for(const [name,before]of Object.entries(frozen.baseline)) {
-    const current=read(file(root,`research/longrun/${id}/artifacts/${name}`),null);
+    const current=read(file(root,`${layout.artifactBase}/${name}`),null);
     if((current===null?null:hash(current))!==before)return finish(root,id,state,frozen,{status:'conflict',errors:[`Artifact changed since run started: ${name}`]},now);
   }
   const plan=getType(frozen.definition.type).planSettlement({...context,expired,validated:checked.value});
@@ -221,8 +229,8 @@ async function collectUnlocked({root,id,client,now=new Date()}) {
   let writes;
   try { writes=plan.artifacts.map(item=>{
     if(typeof item.path!=='string'||seen.has(item.path)||typeof item.content!=='string')throw new Error('Invalid settlement artifact');seen.add(item.path);
-    const target=`research/longrun/${id}/artifacts/${item.path}`, resolved=file(root,target);
-    if(!resolved.startsWith(safePath(root,`research/longrun/${id}/artifacts`)+path.sep))throw new Error('Artifact path escapes instance');
+    const target=`${layout.artifactBase}/${item.path}`, resolved=file(root,target);
+    if(!resolved.startsWith(safePath(root,layout.artifactBase)+path.sep))throw new Error('Artifact path escapes instance');
     const current=read(resolved,null);
     if((current===null?null:hash(current))!==(frozen.baseline[item.path]??null))throw Object.assign(new Error(`Settlement target changed since run started: ${item.path}`),{code:'LONGRUN_CONFLICT'});
     return {path:target,before:current===null?null:hash(current),after:hash(item.content),content:item.content};
@@ -237,17 +245,19 @@ async function collectUnlocked({root,id,client,now=new Date()}) {
   active.phase='applying';saveState(root,state);
   return apply(root,id,state,frozen,receipt,now);
 }
-export async function tickTask({root,id,client,now=new Date(),open=false}) {
+export function tickTask(options) { return withTaskLayout(options.root, () => tickInLayout(options)); }
+async function tickInLayout({root,id,client,now=new Date(),open=false}) {
   if(loadState(root,id).running)return collectTask({root,id,client,now});
   return open?startRun({root,id,client,now}):{action:'hold',taskId:id};
 }
-export function verifyGeneric({root,id}) {
+export function verifyGeneric(options) { return withTaskLayout(options.root, () => verifyInLayout(options)); }
+function verifyInLayout({root,id}) {
   const errors=[];try {
     definition(root,id);const p=taskPaths(root,id);loadState(root,id);
     if(fs.existsSync(p.runs))for(const name of fs.readdirSync(p.runs)) {
       if(!/^(R|RV)\d{4,}$/.test(name))continue;
-      const outcome=readJSON(file(root,`research/longrun/${id}/runs/${name}/outcome.json`),null);
-      if(outcome?.status==='settled'&&readJSON(file(root,`research/longrun/${id}/runs/${name}/settlement.json`),null)?.status!=='applied')errors.push(`${name}: settlement receipt missing`);
+      const outcome=readJSON(file(root,`${resolveLayout(root).tasksDir}/${id}/runs/${name}/outcome.json`),null);
+      if(outcome?.status==='settled'&&readJSON(file(root,`${resolveLayout(root).tasksDir}/${id}/runs/${name}/settlement.json`),null)?.status!=='applied')errors.push(`${name}: settlement receipt missing`);
     }
   }catch(error){errors.push(error.message);}return {ok:!errors.length,errors};
 }

@@ -1,10 +1,14 @@
 import fs from 'node:fs';
+import { AsyncResource } from 'node:async_hooks';
+import { resolveLayout, withTaskLayout } from './layout.mjs';
 import { listTasks, loadState, safePath } from './core/definitions.mjs';
 import { tickTask, collectTask } from './core/runtime.mjs';
 
 /** Routes are trusted host code; task definitions cannot load routes or grant permissions. */
 const defaultRoutes = {
   list: listTasks,
+  registryDirectories: root => [resolveLayout(root).tasksDir],
+  instanceDirectory: (root, row) => `${resolveLayout(root).tasksDir}/${row.id}`,
   load: (root, row) => loadState(root, row.id),
   tick: ({ root, row, ...options }) => tickTask({ root, id: row.id, ...options }),
   collect: ({ root, row, ...options }) => collectTask({ root, id: row.id, ...options }),
@@ -21,7 +25,8 @@ function ordering(a, b) {
 }
 
 /** Reconcile active runs first. One invalid definition cannot stop other instances. */
-export async function tickProject({ root, client, now = new Date(), open = false, ids, routes = {} }) {
+export function tickProject(options) { return withTaskLayout(options.root, () => tickProjectInLayout(options)); }
+async function tickProjectInLayout({ root, client, now = new Date(), open = false, ids, routes = {} }) {
   const api = { ...defaultRoutes, ...routes };
   const entries = selected(api.list(root), ids).map(row => {
     try { return { row, state: api.load(root, row) }; }
@@ -48,24 +53,28 @@ function watchDirectory(directory, listener, onError) {
 }
 
 /** One SDK invalidation source for all registered tasks; never opens rounds. */
-export function startProjectWatcher({ root, client, onResult = () => {}, onError = () => {},
+export function startProjectWatcher(options) { return withTaskLayout(options.root, () => startWatcherInLayout(options)); }
+function startWatcherInLayout({ root, client, onResult = () => {}, onError = () => {}, onReady = () => {}, onActivity = () => {},
   retryMs = 5000, debounceMs = 50, now = () => new Date(), ids, routes = {}, watchDirectory: watch = watchDirectory,
 }) {
   const api = { ...defaultRoutes, ...routes }, signatures = new Map(), directoryWatches = new Map(), pendingFollowups = new Map();
-  const registryDirectory = safePath(root, 'research/longrun');
+  const registryDirectories = api.registryDirectories(root).map(relative => safePath(root, relative));
+  if (!registryDirectories.length) throw new Error('Watcher requires at least one registry directory');
   // A freshly installed consumer can start watching before creating its first
   // task. Create only the registry directory, not a task or execution runtime.
-  fs.mkdirSync(registryDirectory, { recursive: true });
-  let closed = false, dirty = false, timer, retryTimer, registrationTimer, draining, startupPending = true;
+  for (const directory of registryDirectories) fs.mkdirSync(directory, { recursive: true });
+  let closed = false, dirty = false, timer, retryTimer, registrationTimer, draining, startupPending = true, readyAnnounced = false, errors = 0;
+  function activity(kind, detail = {}) { try { onActivity({ kind, at: now().toISOString(), ...detail }); } catch { /* diagnostics must not change settlement */ } }
   function error(error, taskId) {
+    errors++; activity('error', { taskId, code: error?.code, error: message(error) });
     try { onError(error, taskId); } catch { /* diagnostics cannot stop unrelated tasks */ }
     if (!closed && !retryTimer) retryTimer = setTimeout(() => { retryTimer = null; wake(); }, retryMs);
   }
   function updateDirectoryWatches(rows) {
-    const wanted = new Map([[registryDirectory, false]]);
+    const wanted = new Map(registryDirectories.map(directory => [directory, false]));
     for (const row of rows) {
       try {
-        const directory = safePath(root, `research/longrun/${row.id}`);
+        const directory = safePath(root, api.instanceDirectory(root, row));
         if (fs.existsSync(directory)) wanted.set(directory, true);
       } catch (cause) { error(cause, row.id); }
     }
@@ -84,6 +93,8 @@ export function startProjectWatcher({ root, client, onResult = () => {}, onError
     }
   }
   async function reconcile() {
+    const errorsBefore = errors;
+    activity('checking');
     // Host projections can be repaired after a previous process exited between
     // durable settlement and rendering. Failure must not block collection, and
     // a successful repair runs only once for this watcher instance.
@@ -111,7 +122,7 @@ export function startProjectWatcher({ root, client, onResult = () => {}, onError
         const result = await api.collect({ root, row, client, now: now() });
         if (result.error) throw new Error(result.error);
         signatures.set(row.id, next);
-        if (result.action === 'collected') pendingFollowups.set(`${row.id}:${next}`, { root, row, result });
+        if (result.action === 'collected') { pendingFollowups.set(`${row.id}:${next}`, { root, row, result }); activity('collected', { taskId: row.id, runId: result.record?.runId, status: result.record?.status }); }
         try { onResult({ ...result, taskId: row.id }); } catch (cause) { error(cause, row.id); }
       } catch (cause) { error(cause, row.id); }
     }
@@ -120,6 +131,11 @@ export function startProjectWatcher({ root, client, onResult = () => {}, onError
     for (const [key, context] of pendingFollowups) {
       try { await api.afterCollect(context); pendingFollowups.delete(key); }
       catch (cause) { error(cause, context.row.id); }
+    }
+    activity('reconcile', { ok: errors === errorsBefore, errors: errors - errorsBefore, taskCount: rows.length, pendingFollowups: pendingFollowups.size });
+    if (!readyAnnounced && !startupPending && errors === errorsBefore) {
+      readyAnnounced = true;
+      try { onReady({ at: now().toISOString(), taskCount: rows.length }); } catch (cause) { error(cause); }
     }
   }
 
@@ -135,11 +151,11 @@ export function startProjectWatcher({ root, client, onResult = () => {}, onError
     })().finally(() => { draining = null; });
     return draining;
   }
-  function wake() {
+  const wake = AsyncResource.bind(function wake() {
     if (closed) return;
     if (draining) { dirty = true; return; }
     if (!timer) timer = setTimeout(() => { timer = null; void drain(); }, debounceMs);
-  }
+  });
   const stopSDK = client.watchChanges(wake, { onError: cause => error(cause) });
   const ready = drain();
   return {

@@ -2,13 +2,15 @@
 
 ## Per-instance data
 
-Each task owns `research/longrun/<id>/task.md`, `task.json`, `state.json`, `runs/` and `artifacts/`. The project registry is `research/longrun/registry.json`. `working/longrun/` stores control locks and isolated trial data. These are consumer files, not package files.
+Each task owns `<tasksDir>/<id>/task.md`, `task.json`, `state.json`, `runs/` and `artifacts/`. The project registry is `<tasksDir>/registry.json`. `tasksDir` defaults to `research/longrun` and can be selected for a new project in `longrun.config.json`; see [layout configuration](integration.md#project-layout). Changing configuration is not a migration of existing tasks.
+
+Business state includes the active ticket, quota reservations and `nextDueAt`; these are durable task records, not disposable runtime cache. Machine deployment records, heartbeat observations, logs and new offline trials live in the independent user-level longrun runtime directory. Historical execution records referenced by outcomes must be preserved rather than removed during cleanup. Existing `working/longrun/control-lock.sqlite3` remains the shared operation-lock anchor for compatibility; moving it while old entrypoints exist would split the lock domain. The project also retains small layout/runtime bindings and service ownership/lock anchors. These are consumer files, not package files.
 
 The generic state schema separates `control` (`draft`, `enabled`, `paused`, `disabled`) from `running.phase`. An instance has at most one active run. A review run does not become a new research round. Different instances are reconciled separately; one invalid definition must not prevent another task from progressing.
 
 ## Definitions and cadence
 
-A run freezes its definition revision, brief, input contents, hashes and artifact baseline. Editing current configuration affects future runs. Invalid current configuration does not prevent collection under an existing run's frozen definition.
+A run freezes its definition revision, brief, input contents, hashes, output layout and artifact baseline. Editing the current task definition affects future runs. An invalid current task definition does not prevent collection under an existing run's frozen definition. A conflicting project-level `tasksDir` is different: restore the original layout configuration before operating; the collector must not reinterpret the existing run under another root.
 
 Supported cadence:
 
@@ -40,7 +42,7 @@ js-longrun trial my-report --result /path/to/result.json
 js-longrun trial my-review --result /path/to/result.json --answers /path/to/answers.json --memory /path/to/memory.md
 ```
 
-Trial requires supplied output fixtures. It does not invoke a model, browse, submit a production ticket or send a card. It creates a separate ledger under `working/longrun/trials/`, runs validation/settlement there and labels evidence as simulated. Successful trial validation is not a claim about model quality or real channel delivery.
+Trial requires supplied output fixtures. It does not invoke a model, browse, submit a production ticket or send a card. It creates a separate project ledger under the machine runtime's `trials/`, preserves the configured relative task layout inside that project, and uses a separate Worker workspace. Input evidence is copied from the selected production inputs; production task records and artifacts are not changed. SDK callers may supply `runtimeHome` to isolate trial storage. Evidence is labeled as simulated. Successful trial validation is not a claim about model quality or real channel delivery.
 
 ## Notifications and authority
 

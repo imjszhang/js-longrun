@@ -1,6 +1,6 @@
 {
   "name": "js-longrun",
-  "version": "0.1.0-alpha.3",
+  "version": "0.2.0-alpha.0",
   "description": "Persistent long-running task orchestration, review and settlement for js-superagent.",
   "type": "module",
   "license": "MIT",
@@ -20,7 +20,10 @@
     "./types": "./src/types/index.mjs",
     "./types/*": "./src/types/*.mjs",
     "./lock": "./src/lock.mjs",
-    "./cli": "./src/cli.mjs"
+    "./cli": "./src/cli.mjs",
+    "./layout": "./src/layout.mjs",
+    "./service": "./src/service.mjs",
+    "./service-runtime": "./src/service-runtime.mjs"
   },
   "files": [
     "src",

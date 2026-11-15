@@ -2,7 +2,7 @@
 
 Persistent, bounded rounds of work for a long-term project goal. js-longrun decides when a task may run, freezes its inputs, submits work to js-superagent, verifies review evidence and applies results to the owning project.
 
-**Status: `0.1.0-alpha.3` local candidate; `0.1.0-alpha.2` is the published baseline.** Preparing or installing a tarball does not publish it. Existing task definitions remain compatible. The candidate adds an explicit host adapter contract for frozen project materials; it does not create tasks or enable a scheduler.
+**Status: `0.2.0-alpha.0` local candidate; `0.1.0-alpha.3` is the published alpha baseline.** This candidate adds configurable task storage and independent runtime/service management. Preparing or installing it does not publish it, enable tasks, or start services. Existing task definitions and frozen runs remain compatible.
 
 ## Responsibilities
 
@@ -10,7 +10,7 @@ Persistent, bounded rounds of work for a long-term project goal. js-longrun deci
 - **js-superagent:** durable tickets, worker scheduling, isolated workspaces, human replies and Feishu transport. It is a peer dependency; the consumer owns its deployment and credentials.
 - **Your project:** business rules, registered execution capabilities, custom validation/output behavior and production task history. A business adapter may use js-agent-runtime, but js-longrun does not require it.
 
-Runtime data remains under the consumer's `research/longrun/` and `working/longrun/`. No account secret, production state, candidate record or review answer belongs in this npm package.
+Task data defaults to the consumer's `research/longrun/`, configurable through `longrun.config.json`. Machine logs and service observations live under `~/.js-longrun/projects/<project-key>/`. Small project-local compatibility locks and bindings remain under `working/longrun/`; they protect concurrent old callers and cannot be moved by changing the task directory. No account secret, production state, candidate record or review answer belongs in this npm package.
 
 ## Install the candidate
 
@@ -23,12 +23,12 @@ npm run check
 npm pack
 
 # In the consuming project, install the published versions:
-npm install --save-exact js-longrun@0.1.0-alpha.2 js-superagent@0.14.0-alpha.1
+npm install --save-exact js-longrun@0.1.0-alpha.3 js-superagent@0.14.0-alpha.1
 ```
 
 The package's scripts are authoritative for release checks. Runtime consumers do not need to compile the package. Install optional channel dependencies in the consuming project if its js-superagent deployment needs them, such as the Feishu SDK.
 
-The peer range is `js-superagent@^0.14.0-alpha.1 || ^0.15.0-alpha.0`. Legacy tasks remain tested against published `0.14.0-alpha.1`. The new frozen material contract requires material capabilities version 1 and schema 15, supplied by the `0.15.0-alpha.0` candidate; unsupported hosts reject it before starting or charging a round. See [host integration](docs/integration.md) for explicit opt-in and candidate tests. Updating source files alone does not update a running service.
+The peer range is `js-superagent@^0.14.0-alpha.1 || ^0.15.0-alpha.0`. Legacy tasks remain tested against published `0.14.0-alpha.1`. The new frozen material contract requires material capabilities version 1 and schema 15, supported by the separately tested `0.15.0-alpha.11` SDK; unsupported hosts reject it before starting or charging a round. See [host integration](docs/integration.md) for explicit opt-in and candidate tests. Updating source files alone does not update a running service.
 
 ## Create a task without starting it
 
@@ -48,6 +48,25 @@ npx --no-install js-longrun status weekly-report
 ```
 
 The current working directory is the project unless `--project` is supplied. Task IDs and data are scoped to that project; installation location is never used as the project root.
+
+## Configure storage and manage the background service
+
+```json
+{ "schemaVersion": 1, "tasksDir": "research/longrun" }
+```
+
+Save this as `longrun.config.json` before creating tasks. Task roots are project-relative; changing a populated root is not a migration. Old runs keep their original paths and hashes.
+
+On macOS, install one project-wide watcher and one hourly fallback timer:
+
+```sh
+npx --no-install js-longrun service install --interval-seconds 3600 --open-rounds true
+npx --no-install js-longrun service start
+npx --no-install js-longrun service health
+npx --no-install js-longrun service stop
+```
+
+Install only writes a stopped deployment. Start does not enable draft tasks. Stop drains local operations without cancelling Worker tickets or stopping superagent. Projects with business routes must install their existing wrapper with `--entrypoint <absolute-file> --entry-args '[]'`. Status and health inspect stored observations without initializing the execution SDK. See [runtime management](docs/runtime-management.md) for ownership, upgrades, logs, limitations and explicit old-service migration.
 
 ## Built-in task types
 
