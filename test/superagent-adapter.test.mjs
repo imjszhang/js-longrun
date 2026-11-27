@@ -49,7 +49,7 @@ test('observer closes once without starting execution or channel listeners', asy
       watchChanges: callback => { observed = callback; return () => {}; },
       stop: async () => { stops++; }, close: () => { closes++; } };
   } });
-  assert.deepEqual(client.observe('ticket'), { status: 'completed', attentionId: 'question' });
+  assert.deepEqual(client.observe('ticket'), { status: 'completed', attentionId: 'question', domainId: null, assignmentId: null });
   const callback = () => {}; client.watchChanges(callback); assert.equal(observed, callback);
   await client.close(); await client.close();
   assert.equal(opens, 1); assert.equal(stops, 1); assert.equal(closes, 1);
@@ -71,4 +71,31 @@ test('material adapter forwards only explicit frozen contract and does not fall 
   await client.submit('frozen task',{materials});assert.deepEqual(submitted.materials,materials);
   const observed=await client.snapshot('ticket',{contractHash:'a'.repeat(64)});
   assert.equal(observed.workspacePath,null);assert.equal(observed.workspace,null);assert.equal(observed.workerChanges,null);
+});
+
+test('context adapter gates old SDKs and binds reference, stop provenance and identity on capable peers', async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'longrun-host-facts-adapter-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const reference = { producer: 'js-longrun', taskId: 'report', runId: 'R0001', kind: 'round' };
+  let capable = false, submitted, cancelled, published;
+  const client = serviceClient({ projectRoot: root, open: () => ({
+    ...(capable ? { hostFactsCapabilities: () => ({ version: 1 }), publishHostFacts: row => { published = row; return { status: 'stored' }; } } : {}),
+    submit: options => { submitted = options; return { id: 'ticket' }; },
+    cancel: (...args) => { cancelled = args; return { status: 'cancelled' }; },
+    getDetailed: () => ({ domainId: 'current-generation', initialDomainId: 'original-generation', assignmentId: 'current-assignment', initialAssignmentId: 'original-assignment',
+      hostReference: reference, hostReferenceDomainId: 'original-generation', hostReferenceAssignmentId: 'original-assignment' }),
+    stop() {}, close() {},
+  }) });
+  assert.equal((await client.hostFactsCapabilities()).version, 0);
+  assert.equal((await client.publishHostFacts({})).status, 'unavailable');
+  await client.submit('text', { hostReference: reference }); assert.equal(submitted.hostReference, undefined);
+  const options = { source: 'js-longrun', reason: 'review_timeout', expectedDomainId: 'current-generation', expectedAssignmentId: 'current-assignment', reference: { taskId: 'report', runId: 'R0001' } };
+  await client.cancel('ticket', options); assert.deepEqual(cancelled, ['ticket']);
+  capable = true;
+  await client.submit('text', { hostReference: reference }); assert.deepEqual(submitted.hostReference, reference);
+  await client.cancel('ticket', options); assert.deepEqual(cancelled, ['ticket', options]);
+  const record = { scope: 'project', producer: 'js-longrun', key: 'fixture' };
+  await client.publishHostFacts(record); assert.equal(published, record);
+  assert.deepEqual(await client.identity('ticket'), { domainId: 'current-generation', initialDomainId: 'original-generation', assignmentId: 'current-assignment', initialAssignmentId: 'original-assignment',
+    hostReference: reference, hostReferenceDomainId: 'original-generation', hostReferenceAssignmentId: 'original-assignment' });
 });

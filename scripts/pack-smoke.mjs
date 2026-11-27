@@ -83,7 +83,7 @@ try {
     import assert from 'node:assert/strict';
     import * as sdk from 'js-longrun';
     import { loadState } from 'js-longrun/definitions';
-    for (const name of ['definitions','runtime','trial','project','superagent','types','types/review-items','lock','cli','layout','service','service-runtime']) {
+    for (const name of ['definitions','runtime','trial','project','context','superagent','types','types/review-items','lock','cli','layout','service','service-runtime']) {
       const entry = await import('js-longrun/' + name);
       assert.ok(Object.keys(entry).length, 'empty public entry: ' + name);
     }

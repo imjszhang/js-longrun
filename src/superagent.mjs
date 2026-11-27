@@ -26,7 +26,20 @@ export function serviceClient({ projectRoot, open } = {}) {
       finally { runtime.close(); }
     }
   }
+  const capabilities = runtime => typeof runtime.hostFactsCapabilities === 'function' ? runtime.hostFactsCapabilities() : { version: 0 };
+  function identity(runtime, id, detail = typeof runtime.getDetailed === 'function' ? runtime.getDetailed(id) : null) {
+    return { domainId: detail?.domainId ?? null, initialDomainId: detail?.initialDomainId ?? null,
+      assignmentId: detail?.assignmentId ?? null, initialAssignmentId: detail?.initialAssignmentId ?? null,
+      hostReferenceDomainId: detail?.hostReferenceDomainId ?? null, hostReferenceAssignmentId: detail?.hostReferenceAssignmentId ?? null,
+      hostReference: detail?.hostReference ?? null };
+  }
   return {
+    hostFactsCapabilities: () => withProject(capabilities),
+    publishHostFacts: fact => withProject(runtime => capabilities(runtime)?.version === 1 && typeof runtime.publishHostFacts === 'function'
+      ? runtime.publishHostFacts(fact) : { status: 'unavailable', reason: 'host-facts-unsupported' }),
+    listHostFacts: (filters = {}) => withProject(runtime => capabilities(runtime)?.version === 1 && typeof runtime.listHostFacts === 'function'
+      ? runtime.listHostFacts(filters) : null),
+    identity: id => withProject(runtime => identity(runtime, id)),
     materialCapabilities: () => withProject(runtime => {
       if (typeof runtime.materialCapabilities !== 'function') throw Object.assign(new Error('js-superagent does not support the frozen material contract'), { code: 'LONGRUN_MATERIAL_UNSUPPORTED' });
       return runtime.materialCapabilities();
@@ -40,6 +53,7 @@ export function serviceClient({ projectRoot, open } = {}) {
       ...(options.managedJobs === undefined ? {} : { managedJobs: options.managedJobs }),
       ...(options.attentionSnapshotPaths?.length ? { attentionSnapshotPaths: options.attentionSnapshotPaths } : {}),
       ...(options.materials === undefined ? {} : { materials: structuredClone(options.materials) }),
+      ...(options.hostReference && capabilities(runtime)?.version === 1 ? { hostReference: structuredClone(options.hostReference) } : {}),
     }).id),
     snapshot: (id, options = {}) => withProject(runtime => {
       const view = runtime.get(id);
@@ -49,6 +63,7 @@ export function serviceClient({ projectRoot, open } = {}) {
       const inspection = strict && workspace ? runtime.inspectWorkspace(id) : null;
       if (inspection?.workspace && inspection.workspace.provisionId !== workspace.provisionId) throw new Error('Workspace changed during material evidence collection');
       return { status: view.status, report: report?.state ?? null, summary: report?.summary ?? null,
+        ...identity(runtime, id, detail),
         workspacePath: workspace?.path ?? (strict ? null : root),
         ...(strict ? { workspace: workspace ?? null, materialBinding: detail?.materialBinding ?? null,
           workspacePreparation: detail?.workspacePreparation ?? null, workspaceHistory: detail?.workspaceHistory ?? [],
@@ -59,7 +74,7 @@ export function serviceClient({ projectRoot, open } = {}) {
     jobs: id => withProject(runtime => runtime.listJobs(id).map(job => ({ id: job.id, profileId: job.profileId, status: job.status }))),
     reply: (id, text) => withProject(runtime => runtime.reply(id, text).status),
     answer: (id, answers) => withProject(runtime => runtime.answer(id, { answers }).attentionId),
-    cancel: id => withProject(runtime => runtime.cancel(id).status),
+    cancel: (id, options = {}) => withProject(runtime => runtime.cancel(id, ...(capabilities(runtime)?.version === 1 ? [options] : [])).status),
   };
 }
 
@@ -71,7 +86,11 @@ export function watchServiceClient({ projectRoot, open } = {}) {
   let closed = false;
   return {
     ...client,
-    observe: id => ({ status: runtime.get(id).status, attentionId: runtime.getDomainTicket(id).attention?.id ?? null }),
+    observe: id => {
+      const domain = runtime.getDomainTicket(id), detail = typeof runtime.getDetailed === 'function' ? runtime.getDetailed(id) : null;
+      return { status: runtime.get(id).status, attentionId: domain.attention?.id ?? null,
+        domainId: detail?.domainId ?? domain.id ?? null, assignmentId: detail?.assignmentId ?? domain.assignments?.at(-1)?.id ?? null };
+    },
     watchChanges: (listener, options) => runtime.watchChanges(listener, options),
     close: async () => {
       if (closed) return;

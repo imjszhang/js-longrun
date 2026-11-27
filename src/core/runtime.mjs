@@ -6,6 +6,7 @@ import { resolveLayout, withTaskLayout, bindTaskLayout, freezeRunLayout, frozenR
 import { readDefinition, validateDefinition, taskPaths, loadState, saveState, safePath, listTasks } from './definitions.mjs';
 import { getType, prepareTypeContext } from '../types/index.mjs';
 import { freezeMaterialContract, materialSubmission, materialContractErrors, equal } from '../types/common.mjs';
+import { syncTaskFacts } from '../context.mjs';
 
 const hash = text => createHash('sha256').update(text).digest('hex');
 const json = value => JSON.stringify(value, null, 2) + '\n';
@@ -18,6 +19,25 @@ function write(file, value) {
   finally { fs.rmSync(tmp,{force:true}); }
 }
 function file(root, relative) { return safePath(root, relative); }
+function saveObservedState(root, state, now) {
+  const prior = loadState(root, state.taskId);
+  if (equal({ ...prior, updatedAt: null }, { ...state, updatedAt: null })) return;
+  const previousAt = Date.parse(prior.updatedAt);
+  state.updatedAt = new Date(Math.max(+now, Number.isFinite(previousAt) ? previousAt + 1 : 0)).toISOString();
+  saveState(root, state);
+}
+async function withContext(options, operation) {
+  let result;
+  try { result = await operation(); }
+  catch (error) {
+    const contextSync = await syncTaskFacts(options);
+    if (error && typeof error === 'object') error.contextSync = contextSync;
+    throw error;
+  }
+  // Host context is a derived view. Never place it in submission or settlement
+  // catches: retrying this write must not repeat business work.
+  return { ...result, contextSync: await syncTaskFacts(options) };
+}
 function weekId(now, timezone) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now).map(p => [p.type,p.value]));
   const date = new Date(`${parts.year}-${parts.month}-${parts.day}T00:00:00Z`);
@@ -84,7 +104,7 @@ function statusInLayout({root,id,now=new Date()}) {
   if(state.failures>=2)reasons.push('failures');
   return {definition:def,state,gates:{ok:!reasons.length,reasons}};
 }
-export function startRun(options) {return withTaskLayout(options.root,()=>withLongrunLock(options.root,()=>startUnlocked(options)));}
+export function startRun(options) {return withTaskLayout(options.root,()=>withContext(options,()=>withLongrunLock(options.root,()=>startUnlocked(options))));}
 async function startUnlocked({root,id,client,now=new Date(),kind='round',selectedKeys=[],materials}) {
   const {state,definition:def,gates}=genericStatus({root,id,now});
   const reasons=gates.reasons.filter(x=>!(kind==='review'&&['not-due','weekly-budget'].includes(x)));
@@ -104,18 +124,19 @@ async function startUnlocked({root,id,client,now=new Date(),kind='round',selecte
   if(kind==='review')state.reviewCount=(state.reviewCount??0)+1;
   else {state.round++;state.week.runs++;}
   state.running={runId:frozen.runId,kind,ticketId:null,phase:'submitting',submittedAt:now.toISOString()};
-  saveState(root,state);
+  saveObservedState(root,state,now);
   try {
     const ticket=await client.submit(frozen.plan.text,{attentionSnapshotPaths:frozen.plan.attentionSnapshotPaths,operatorNotifications:def.review.mode==='items',managedJobs:false,
+      hostReference:{producer:'js-longrun',taskId:id,runId:frozen.runId,kind},
       ...(frozen.executionContract?{materials:materialSubmission(frozen.executionContract)}:{})});
     if(typeof ticket!=='string'||!ticket)throw new Error('Missing ticket id');
-    state.running.ticketId=ticket;state.running.phase='queued';saveState(root,state);
+    state.running.ticketId=ticket;state.running.phase='queued';saveObservedState(root,state,now);
     write(file(root,`${base}/binding.json`),json({taskId:id,runId:frozen.runId,ticketId:ticket,definitionHash:frozen.definitionHash,layout:frozen.layout,
       ...(frozen.executionContract?{executionContract:frozen.executionContract,workspaceLineage:[]}:{})}));
     return {action:'opened',taskId:id,ticketId:ticket,runId:frozen.runId};
   } catch(error) {
     // Submission may have succeeded remotely: never silently submit a duplicate.
-    state.running.phase='needs_attention';state.running.error=String(error.message??error);saveState(root,state);
+    state.running.phase='needs_attention';state.running.error=String(error.message??error);saveObservedState(root,state,now);
     return {action:'blocked',taskId:id,error:state.running.error};
   }
 }
@@ -124,15 +145,15 @@ function nextDue(def,now) {
   const anchor=Date.parse(def.trigger.anchor), ms=def.trigger.intervalHours*3600000;
   return new Date(anchor+Math.max(0,Math.floor((+now-anchor)/ms)+1)*ms).toISOString();
 }
-function finish(root,id,state,frozen,outcome,now) {
-  const record={schemaVersion:1,taskId:id,runId:frozen.runId,kind:frozen.kind,ticketId:state.running?.ticketId,status:outcome.status,summary:outcome.summary??'',errors:outcome.errors??[],finishedAt:now.toISOString()};
+function finish(root,id,state,frozen,outcome,now,generation={}) {
+  const record={schemaVersion:1,taskId:id,runId:frozen.runId,kind:frozen.kind,ticketId:state.running?.ticketId,status:outcome.status,summary:outcome.summary??'',errors:outcome.errors??[],finishedAt:now.toISOString(),...generation};
   const target=file(root,`${frozenRunLayout(frozen).runBase}/outcome.json`);
   const existing=readJSON(target,null);if(!existing)write(target,json(record));
   state.running=null;
   if(outcome.status==='settled')state.failures=0;else if(!['expired','cancelled'].includes(outcome.status))state.failures++;
   if(frozen.kind==='round')state.nextDueAt=nextDue(frozen.definition,now);
   if(state.failures>=2&&state.control==='enabled'){state.control='paused';state.pauseReason='failures';}
-  state.updatedAt=now.toISOString();saveState(root,state);
+  saveObservedState(root,state,now);
   return {action:'collected',taskId:id,record:existing??record};
 }
 function apply(root,id,state,frozen,transaction,now) {
@@ -144,9 +165,9 @@ function apply(root,id,state,frozen,transaction,now) {
     write(target,change.content);
   }
   transaction.status='applied';write(file(root,`${frozenRunLayout(frozen).runBase}/settlement.json`),json(transaction));
-  return finish(root,id,state,frozen,{status:transaction.outcomeStatus??'settled',summary:transaction.summary},now);
+  return finish(root,id,state,frozen,{status:transaction.outcomeStatus??'settled',summary:transaction.summary},now,transaction.generation);
 }
-export function collectTask(options) {return withTaskLayout(options.root,()=>withLongrunLock(options.root,()=>collectUnlocked(options)));}
+export function collectTask(options) {return withTaskLayout(options.root,()=>withContext(options,()=>withLongrunLock(options.root,()=>collectUnlocked(options))));}
 async function collectUnlocked({root,id,client,now=new Date()}) {
   const state=loadState(root,id), active=state.running;
   if(!active)return {action:'none',taskId:id};
@@ -170,13 +191,18 @@ async function collectUnlocked({root,id,client,now=new Date()}) {
   if(transaction){if(frozen.executionContract&&transaction.contractHash!==frozen.executionContract.hash)return {action:'blocked',taskId:id,error:'Settlement material contract changed'};return apply(root,id,state,frozen,transaction,now);}
   if(!active.ticketId)return {action:'blocked',taskId:id,error:'Submission needs inspection; no bound ticket'};
   const snapshot=await client.snapshot(active.ticketId,...(frozen.executionContract?[{contractHash:frozen.executionContract.hash}]:[]));
+  const generation={...(snapshot.domainId?{domainId:snapshot.domainId}:{}),...(snapshot.assignmentId?{assignmentId:snapshot.assignmentId}:{})};
+  const stop = reason => client.cancel(active.ticketId, { source:'js-longrun', reason,
+    ...(snapshot.domainId ? { expectedDomainId:snapshot.domainId } : {}),
+    ...(snapshot.assignmentId ? { expectedAssignmentId:snapshot.assignmentId } : {}),
+    reference:{taskId:id,runId:active.runId} });
   const age=+now-Date.parse(active.submittedAt), limit=frozen.definition.limits;
   if(frozen.executionContract&&['queued','preparing','blocked'].includes(snapshot.workspacePreparation?.status)&&snapshot.status!=='cancelled') {
     // Preparation's synthetic waiting report is not an invitation to collect
     // business outputs or a new human-review allowance.
     active.executionSince??=snapshot.workspace?.createdAt??snapshot.workspacePreparation.createdAt??active.submittedAt;
-    if(+now-Date.parse(active.executionSince)>limit.maxExecutionMinutes*60000){await client.cancel(active.ticketId);return finish(root,id,state,frozen,{status:'failed',errors:['Workspace preparation exceeded the original execution deadline']},now);}
-    active.phase='preparing';saveState(root,state);
+    if(+now-Date.parse(active.executionSince)>limit.maxExecutionMinutes*60000){await stop('workspace_preparation_timeout');return finish(root,id,state,frozen,{status:'failed',errors:['Workspace preparation exceeded the original execution deadline']},now,generation);}
+    active.phase='preparing';saveObservedState(root,state,now);
     return snapshot.workspacePreparation.status==='blocked'
       ?{action:'blocked',taskId:id,error:snapshot.workspacePreparation.error?.message??'Workspace preparation needs inspection'}
       :{action:'pending',taskId:id,ticket:'preparing'};
@@ -185,10 +211,10 @@ async function collectUnlocked({root,id,client,now=new Date()}) {
     if(snapshot.status==='running'&&(!['running','preparing'].includes(active.phase)||!active.executionSince))active.executionSince=now.toISOString();
     const timeout=snapshot.status==='queued'?age>limit.queueTimeoutHours*3600000:
       +now-Date.parse(active.executionSince??active.submittedAt)>limit.maxExecutionMinutes*60000;
-    if(timeout){await client.cancel(active.ticketId);return finish(root,id,state,frozen,{status:'failed',errors:['Execution or queue timeout']},now);}
-    active.phase=snapshot.status;saveState(root,state);return {action:'pending',taskId:id,ticket:snapshot.status};
+    if(timeout){await stop(snapshot.status==='queued'?'queue_timeout':'execution_timeout');return finish(root,id,state,frozen,{status:'failed',errors:['Execution or queue timeout']},now,generation);}
+    active.phase=snapshot.status;saveObservedState(root,state,now);return {action:'pending',taskId:id,ticket:snapshot.status};
   }
-  if(snapshot.status==='cancelled')return finish(root,id,state,frozen,{status:'cancelled'},now);
+  if(snapshot.status==='cancelled')return finish(root,id,state,frozen,{status:'cancelled'},now,generation);
   if(!['waiting','completed'].includes(snapshot.status))return {action:'pending',taskId:id,ticket:snapshot.status};
   if(frozen.executionContract) {
     const errors=materialContractErrors({frozen,binding,snapshot});
@@ -209,20 +235,20 @@ async function collectUnlocked({root,id,client,now=new Date()}) {
   const context={...frozen,ticketId:active.ticketId,result,memoryOutput,snapshot,allowPending:snapshot.status==='waiting'};
   let checked;
   if(!errors.length){checked=getType(frozen.definition.type).validateResult(context);errors.push(...checked.errors);}
-  if(errors.length){if(snapshot.status==='waiting')await client.cancel(active.ticketId);return finish(root,id,state,frozen,{status:'invalid',errors},now);}
+  if(errors.length){if(snapshot.status==='waiting')await stop('invalid_result');return finish(root,id,state,frozen,{status:'invalid',errors},now,generation);}
   let expired=false;
   if(snapshot.status==='waiting') {
     const since=checked.review?.since??snapshot.attentionSnapshots?.at(-1)?.at??active.reviewSince??now.toISOString();
     active.reviewSince??=since;active.phase='awaiting_input';delete active.executionSince;
     if(+now-Date.parse(active.reviewSince)>=frozen.definition.review.timeoutHours*3600000) {
-      await client.cancel(active.ticketId);
+      await stop('review_timeout');
       expired=true;
     }
-    if(!expired){saveState(root,state);return {action:'awaiting_review',taskId:id,runId:active.runId};}
+    if(!expired){saveObservedState(root,state,now);return {action:'awaiting_review',taskId:id,runId:active.runId};}
   }
   for(const [name,before]of Object.entries(frozen.baseline)) {
     const current=read(file(root,`${layout.artifactBase}/${name}`),null);
-    if((current===null?null:hash(current))!==before)return finish(root,id,state,frozen,{status:'conflict',errors:[`Artifact changed since run started: ${name}`]},now);
+    if((current===null?null:hash(current))!==before)return finish(root,id,state,frozen,{status:'conflict',errors:[`Artifact changed since run started: ${name}`]},now,generation);
   }
   const plan=getType(frozen.definition.type).planSettlement({...context,expired,validated:checked.value});
   const seen=new Set();
@@ -236,19 +262,20 @@ async function collectUnlocked({root,id,client,now=new Date()}) {
     return {path:target,before:current===null?null:hash(current),after:hash(item.content),content:item.content};
   });
   } catch(error) {
-    if(error.code==='LONGRUN_CONFLICT')return finish(root,id,state,frozen,{status:'conflict',errors:[error.message]},now);
+    if(error.code==='LONGRUN_CONFLICT')return finish(root,id,state,frozen,{status:'conflict',errors:[error.message]},now,generation);
     throw error;
   }
   const receipt={schemaVersion:1,key:`${id}:${active.runId}:1`,status:'applying',outcomeStatus:expired?'expired':'settled',summary:plan.summary,writes,
+    ...(Object.keys(generation).length?{generation}:{}),
     ...(frozen.executionContract?{contractHash:frozen.executionContract.hash}:{})};
   write(file(root,`${base}/settlement.json`),json(receipt));
-  active.phase='applying';saveState(root,state);
+  active.phase='applying';saveObservedState(root,state,now);
   return apply(root,id,state,frozen,receipt,now);
 }
 export function tickTask(options) { return withTaskLayout(options.root, () => tickInLayout(options)); }
 async function tickInLayout({root,id,client,now=new Date(),open=false}) {
   if(loadState(root,id).running)return collectTask({root,id,client,now});
-  return open?startRun({root,id,client,now}):{action:'hold',taskId:id};
+  return open?startRun({root,id,client,now}):withContext({root,id,client},()=>({action:'hold',taskId:id}));
 }
 export function verifyGeneric(options) { return withTaskLayout(options.root, () => verifyInLayout(options)); }
 function verifyInLayout({root,id}) {

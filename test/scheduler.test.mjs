@@ -242,3 +242,59 @@ test('one registration catch-up closes native arming gap without periodic pollin
   await delay(250);
   assert.equal(reads, afterCatchup, 'registration catch-up must not become a polling loop');
 });
+
+test('idle task context sync retries through existing watcher and restarts without collecting again', async t => {
+  const f = fixture(t), facts = new Map(); let fail = true, writes = 0;
+  f.add('finished', { control: 'enabled', running: { ticketId: 'ticket', runId: 'R0001' }, updatedAt: '2026-04-01T00:00:00.000Z' }, 'completed');
+  f.client.hostFactsCapabilities = () => ({ version: 1 });
+  f.client.publishHostFacts = row => {
+    if (fail) throw new Error('temporary context service failure');
+    if (facts.get(row.key)?.sourceVersion === row.sourceVersion) return { status: 'unchanged' };
+    facts.set(row.key, row); writes++; return { status: 'stored' };
+  };
+  f.routes.collect = async ({ row }) => {
+    f.calls.push(row.id); f.states.get(row.id).running = null;
+    return { action: 'collected', record: { runId: 'R0001', status: 'settled' } };
+  };
+  f.routes.facts = ({ row }) => [{ scope: 'project', producer: 'js-longrun', key: `task:${row.id}`,
+    sourceVersion: JSON.stringify(f.states.get(row.id)), observedAt: '2026-04-01T00:00:00.000Z', facts: { state: f.states.get(row.id) } }];
+  const watcher = f.start(); await watcher.ready;
+  assert.deepEqual(f.calls, ['finished']);
+  assert.ok(f.errors.some(({ error }) => error.code === 'HOST_CONTEXT_SYNC_PENDING'));
+  fail = false;
+  await until(() => facts.has('task:finished'));
+  assert.deepEqual(f.calls, ['finished']);
+  assert.equal(facts.get('task:finished').facts.state.running, null);
+  await watcher.close();
+  const before = writes, restarted = f.start(); await restarted.ready;
+  assert.equal(writes, before); assert.deepEqual(f.calls, ['finished']);
+  await restarted.close();
+});
+
+test('project tick synchronizes dormant and invalid task facts without opening work', async t => {
+  const f = fixture(t), seen = [];
+  f.add('dormant', { control: 'paused', running: null });
+  f.add('invalid', { control: 'invalid', running: null }, 'waiting', { error: 'invalid task' });
+  f.client.hostFactsCapabilities = () => ({ version: 1 });
+  f.client.publishHostFacts = row => { seen.push(row); return { status: 'stored' }; };
+  f.routes.tick = async () => ({ action: 'hold' });
+  f.routes.facts = ({ row }) => [{ scope: 'project', producer: 'js-longrun', key: `task:${row.id}`,
+    sourceVersion: row.id, observedAt: '2026-04-01T00:00:00.000Z', facts: { availability: row.error ? 'unavailable' : 'available' } }];
+  const results = await tickProject({ root: f.root, client: f.client, routes: f.routes });
+  assert.equal(results.find(row => row.taskId === 'dormant').action, 'hold');
+  assert.equal(results.find(row => row.taskId === 'invalid').action, 'error');
+  assert.ok(seen.some(row => row.key === 'task:invalid' && row.facts.availability === 'unavailable'));
+  assert.ok(seen.some(row => row.key === 'task:dormant'));
+});
+
+test('unchanged public status still reconciles after assignment or domain replacement', async t => {
+  const f = fixture(t);
+  f.add('report', { running: { ticketId: 'same-ticket', runId: 'R0001' } }, 'running');
+  Object.assign(f.tickets.get('same-ticket'), { domainId: 'domain-one', assignmentId: 'assignment-one' });
+  const watcher = f.start(); await watcher.ready; assert.deepEqual(f.calls, ['report']);
+  f.tickets.get('same-ticket').assignmentId = 'assignment-two'; f.sdkEvent();
+  await until(() => f.calls.length === 2);
+  f.tickets.get('same-ticket').domainId = 'domain-two'; f.sdkEvent();
+  await until(() => f.calls.length === 3);
+  await watcher.close();
+});
