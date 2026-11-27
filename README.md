@@ -2,7 +2,7 @@
 
 Persistent, bounded rounds of work for a long-term project goal. js-longrun decides when a task may run, freezes its inputs, submits work to js-superagent, verifies review evidence and applies results to the owning project.
 
-**Status: `0.2.0-alpha.0` local candidate; `0.1.0-alpha.3` is the published alpha baseline.** This candidate adds configurable task storage and independent runtime/service management. Preparing or installing it does not publish it, enable tasks, or start services. Existing task definitions and frozen runs remain compatible.
+**Version: `0.2.0-alpha.1` — alpha release.** This version adds coordinator-facing task and settlement facts to the existing configurable task storage and independent service management. Installing it does not enable tasks or start services. Existing task definitions and frozen runs remain compatible; historical records are not migrated.
 
 ## Responsibilities
 
@@ -12,7 +12,7 @@ Persistent, bounded rounds of work for a long-term project goal. js-longrun deci
 
 Task data defaults to the consumer's `research/longrun/`, configurable through `longrun.config.json`. Machine logs and service observations live under `~/.js-longrun/projects/<project-key>/`. Small project-local compatibility locks and bindings remain under `working/longrun/`; they protect concurrent old callers and cannot be moved by changing the task directory. No account secret, production state, candidate record or review answer belongs in this npm package.
 
-## Install the candidate
+## Install
 
 Node.js **22.13 or newer** is required.
 
@@ -23,12 +23,12 @@ npm run check
 npm pack
 
 # In the consuming project, install the published versions:
-npm install --save-exact js-longrun@0.1.0-alpha.3 js-superagent@0.14.0-alpha.1
+npm install --save-exact js-longrun@0.2.0-alpha.1 js-superagent@0.15.0-alpha.16
 ```
 
 The package's scripts are authoritative for release checks. Runtime consumers do not need to compile the package. Install optional channel dependencies in the consuming project if its js-superagent deployment needs them, such as the Feishu SDK.
 
-The peer range is `js-superagent@^0.14.0-alpha.1 || ^0.15.0-alpha.0`. Legacy tasks remain tested against published `0.14.0-alpha.1`. The new frozen material contract requires material capabilities version 1 and schema 15, supported by the separately tested `0.15.0-alpha.11` SDK; unsupported hosts reject it before starting or charging a round. See [host integration](docs/integration.md) for explicit opt-in and candidate tests. Updating source files alone does not update a running service.
+The peer range is `js-superagent@^0.14.0-alpha.1 || ^0.15.0-alpha.0`. Legacy tasks remain tested against published `0.14.0-alpha.1`. The frozen material contract requires material capabilities version 1 and schema 15; unsupported hosts reject it before starting or charging a round. The optional coordinator facts integration uses host facts capabilities version 1, introduced in `0.15.0-alpha.16`; older hosts retain ordinary task behavior and report this integration as unavailable. See [host integration](docs/integration.md) for explicit opt-in and compatibility tests. Updating source files alone does not update a running service.
 
 ## Create a task without starting it
 
