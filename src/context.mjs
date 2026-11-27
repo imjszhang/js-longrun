@@ -50,6 +50,10 @@ export function readTaskFacts({ root, id }) {
     let observedAt = [iso(state?.updatedAt), sourceTime([paths.state, paths.definition])].sort().at(-1);
     for (const runId of fs.existsSync(paths.runs) ? fs.readdirSync(paths.runs).sort() : []) {
       if (!/^(R|RV)\d{4,}$/.test(runId)) continue;
+      // A repaired historical source must advance the same overview timeline as
+      // its failed read, even when the current task state did not change.
+      observedAt = [observedAt, sourceTime(['draft.json', 'binding.json', 'outcome.json', 'settlement.json']
+        .map(name => path.join(paths.runs, runId, name)))].sort().at(-1);
       try {
         const runDirectory = safePath(root, `${resolveLayout(root).tasksDir}/${id}/runs/${runId}`);
         const outcomePath = safePath(root, path.relative(root, path.join(runDirectory, 'outcome.json')));
@@ -71,8 +75,6 @@ export function readTaskFacts({ root, id }) {
           result: { settlement, summary: String(record.summary ?? '').slice(0, 1200), errorCount: record.errors?.length ?? 0 } }));
       } catch {
         error ??= 'run-history-unavailable';
-        observedAt = [observedAt, sourceTime(['draft.json', 'binding.json', 'outcome.json', 'settlement.json']
-          .map(name => path.join(paths.runs, runId, name)))].sort().at(-1);
       }
     }
     rows.unshift(makeTaskFact({ taskId: id, type: definition?.type ?? null, state, observedAt,

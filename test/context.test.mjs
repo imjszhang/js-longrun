@@ -113,6 +113,28 @@ test('frozen settlement projects after definition failure; sync failure does not
   assert.equal(readTaskFacts({ root: f.root, id: 'report' }).length, 1, 'never assert settlement without applied receipt');
 });
 
+test('repairing a historical receipt replaces unavailable context without touching task state', async t => {
+  const f = await fixture(t); await f.start(); f.writeResult(); await f.collect();
+  const paths = taskPaths(f.root, 'report'), receiptPath = path.join(paths.runs, 'R0001/settlement.json');
+  const stateBefore = fs.readFileSync(paths.state, 'utf8'), stateMtime = fs.statSync(paths.state).mtimeMs;
+  const receiptBefore = fs.readFileSync(receiptPath, 'utf8');
+  const changedAt = new Date(Date.now() + 10000), repairedAt = new Date(+changedAt + 1000);
+  fs.writeFileSync(receiptPath, '{damaged receipt'); fs.utimesSync(receiptPath, changedAt, changedAt);
+  assert.equal((await syncTaskFacts({ root: f.root, id: 'report', client: f.client })).status, 'synced');
+  const overview = () => [...f.client.facts.values()].find(row => row.key === 'task:report');
+  const unavailableAt = overview().observedAt;
+  assert.equal(overview().facts.availability, 'unavailable');
+  fs.writeFileSync(receiptPath, receiptBefore); fs.utimesSync(receiptPath, repairedAt, repairedAt);
+  assert.equal((await syncTaskFacts({ root: f.root, id: 'report', client: f.client })).status, 'synced');
+  assert.equal(overview().facts.availability, 'available');
+  assert.ok(overview().observedAt > unavailableAt, 'repair must advance the same source observation timeline');
+  assert.equal(fs.readFileSync(paths.state, 'utf8'), stateBefore);
+  assert.equal(fs.statSync(paths.state).mtimeMs, stateMtime);
+  const writes = f.client.writes();
+  await syncTaskFacts({ root: f.root, id: 'report', client: f.client });
+  assert.equal(f.client.writes(), writes, 'repaired history remains idempotent');
+});
+
 test('known and original generations bind outcomes without reassigning history to retries', async () => {
   const client = host(), record = { status: 'expired', finishedAt: now.toISOString() };
   const row = makeRunFact({ taskId: 'report', runId: 'R0001', ticketId: 'ticket-one', record });
