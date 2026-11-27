@@ -20,6 +20,8 @@ JS_LONGRUN_MATERIAL_SDK=/absolute/path/to/candidate/src/index.mjs \
 
 The fixture creates its own temporary `JS_SUPERAGENT_HOME`. It exercises frozen input despite later source edits, initial copy, same-contract workspace generation change, denied superagent artifact application, and longrun-only settlement with duplicate collection. The normal suite verifies rejection before round/budget mutation on unsupported hosts, unknown-submit ownership, missing evidence, out-of-scope outputs, review evidence and recoverable settlement. The candidate test skips when no SDK entrypoint is specified; a release must run it explicitly and record the exact tested package.
 
+For the host-context candidate, set `JS_LONGRUN_CONTEXT_SDK=/absolute/path/to/candidate/src/index.mjs` and run the same integration test. This additionally requires host facts capabilities version 1 and verifies the immutable submission reference, active-task reconciliation and applied outcome bound to the correct domain while retaining the material restrictions. The default suite continues testing the published older peer and its explicit unavailable diagnostic. All fixtures use temporary state and fictional tasks; no real account, card or production ledger is needed for these checks.
+
 ## Trusted publishing
 
 All subsequent npm releases use GitHub trusted publishing, following the js-superagent release model. Do not run local npm publish or ask for per-release browser authorization. Do not fall back to long-lived npm tokens.

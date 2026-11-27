@@ -16,6 +16,7 @@
     "./runtime": "./src/core/runtime.mjs",
     "./trial": "./src/core/trial.mjs",
     "./project": "./src/project.mjs",
+    "./context": "./src/context.mjs",
     "./superagent": "./src/superagent.mjs",
     "./types": "./src/types/index.mjs",
     "./types/*": "./src/types/*.mjs",

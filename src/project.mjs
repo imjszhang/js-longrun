@@ -3,6 +3,7 @@ import { AsyncResource } from 'node:async_hooks';
 import { resolveLayout, withTaskLayout } from './layout.mjs';
 import { listTasks, loadState, safePath } from './core/definitions.mjs';
 import { tickTask, collectTask } from './core/runtime.mjs';
+import { readTaskFacts, syncProjectFacts } from './context.mjs';
 
 /** Routes are trusted host code; task definitions cannot load routes or grant permissions. */
 const defaultRoutes = {
@@ -16,6 +17,7 @@ const defaultRoutes = {
   preserveInitial: () => false,
   onStart: async () => {},
   afterCollect: async () => {},
+  facts: ({ root, row }) => readTaskFacts({ root, id: row.id }),
 };
 const message = error => String(error?.message ?? error);
 const selected = (rows, ids) => ids ? rows.filter(row => ids.includes(row.id)) : rows;
@@ -28,7 +30,10 @@ function ordering(a, b) {
 export function tickProject(options) { return withTaskLayout(options.root, () => tickProjectInLayout(options)); }
 async function tickProjectInLayout({ root, client, now = new Date(), open = false, ids, routes = {} }) {
   const api = { ...defaultRoutes, ...routes };
-  const entries = selected(api.list(root), ids).map(row => {
+  let listed;
+  try { listed = api.list(root); }
+  catch (error) { error.contextSync = await syncProjectFacts({ root, client, routes: api, ids }); throw error; }
+  const entries = selected(listed, ids).map(row => {
     try { return { row, state: api.load(root, row) }; }
     catch (error) { return { row, error }; }
   }).sort(ordering);
@@ -43,6 +48,8 @@ async function tickProjectInLayout({ root, client, now = new Date(), open = fals
       results.push({ ...result, taskId: row.id, ...(row.error ? { definitionError: row.error } : {}) });
     } catch (error) { results.push({ taskId: row.id, action: 'error', error: message(error) }); }
   }
+  const contextSync = await syncProjectFacts({ root, client, routes: api, ids });
+  for (const result of results) result.contextSync = contextSync.tasks?.find(row => row.taskId === result.taskId) ?? contextSync;
   return results;
 }
 
@@ -102,7 +109,12 @@ function startWatcherInLayout({ root, client, onResult = () => {}, onError = () 
       try { await api.onStart({ root }); startupPending = false; }
       catch (cause) { error(cause); }
     }
-    const rows = selected(api.list(root), ids);
+    let rows;
+    try { rows = selected(api.list(root), ids); }
+    catch (cause) {
+      activity('context-sync', { contextSync: await syncProjectFacts({ root, client, routes: api, ids }) });
+      throw cause;
+    }
     updateDirectoryWatches(rows);
     const present = new Set(rows.map(row => row.id));
     for (const id of signatures.keys()) if (!present.has(id)) signatures.delete(id);
@@ -111,7 +123,7 @@ function startWatcherInLayout({ root, client, onResult = () => {}, onError = () 
         const state = api.load(root, row), active = state.running;
         if (!active) { signatures.delete(row.id); if (row.error) throw new Error(row.error); continue; }
         const view = active.ticketId ? await client.observe(active.ticketId) : { status: 'unbound' };
-        const next = JSON.stringify([active.ticketId, active.runId, view.status, view.attentionId ?? null]);
+        const next = JSON.stringify([active.ticketId, active.runId, view.domainId ?? null, view.assignmentId ?? null, view.status, view.attentionId ?? null]);
         if (['failed', 'interrupted'].includes(view.status)) { signatures.set(row.id, next); continue; }
         if (signatures.get(row.id) === next) continue;
         // A project adapter may retain an already frozen waiting review on restart.
@@ -132,6 +144,9 @@ function startWatcherInLayout({ root, client, onResult = () => {}, onError = () 
       try { await api.afterCollect(context); pendingFollowups.delete(key); }
       catch (cause) { error(cause, context.row.id); }
     }
+    const contextSync = await syncProjectFacts({ root, client, routes: api, ids });
+    activity('context-sync', { contextSync });
+    if (contextSync.status === 'pending') error(Object.assign(new Error('Host context synchronization pending'), { code: 'HOST_CONTEXT_SYNC_PENDING' }));
     activity('reconcile', { ok: errors === errorsBefore, errors: errors - errorsBefore, taskCount: rows.length, pendingFollowups: pendingFollowups.size });
     if (!readyAnnounced && !startupPending && errors === errorsBefore) {
       readyAnnounced = true;

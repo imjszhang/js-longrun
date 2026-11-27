@@ -7,10 +7,11 @@ import { pathToFileURL } from 'node:url';
 import { serviceClient } from '../src/superagent.mjs';
 import { createTask, defaultDefinition, enableTask, taskPaths } from '../src/core/definitions.mjs';
 import { startRun, collectTask } from '../src/core/runtime.mjs';
+import { syncProjectFacts } from '../src/context.mjs';
 
 // The legacy peer remains covered by the normal suite. This explicit candidate
 // matrix seam runs against a packed SDK or a reviewed local SDK entrypoint.
-const candidate = process.env.JS_LONGRUN_MATERIAL_SDK;
+const candidate = process.env.JS_LONGRUN_CONTEXT_SDK ?? process.env.JS_LONGRUN_MATERIAL_SDK;
 test('candidate SDK preserves frozen materials through preparation and longrun-only settlement', { skip: !candidate && 'Set JS_LONGRUN_MATERIAL_SDK to the material-capable SDK entrypoint' }, async t => {
   const stateHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'longrun-material-sdk-state-'))), previousHome = process.env.JS_SUPERAGENT_HOME;
   process.env.JS_SUPERAGENT_HOME = stateHome;
@@ -41,12 +42,15 @@ test('candidate SDK preserves frozen materials through preparation and longrun-o
   }) });
   const open = projectRoot => sdk.createProjectAgent({ projectRoot, harnessRegistry: registry, workspace: { mode: 'copy' }, execution: { driver: 'material-fixture', enableAgentTools: true } }).init();
   const setup = open(root), principal = { source: 'local', id: 'operator' };
+  if (process.env.JS_LONGRUN_CONTEXT_SDK) assert.equal(setup.hostFactsCapabilities().version, 1);
+  const hasHostFacts = setup.hostFactsCapabilities?.().version === 1;
   setup.configureMaterials({ entries: [{ id: 'inputs', project: 'self', include: ['source.md'], exclude: [], views: ['current', 'snapshot'], readers: [principal], destinations: [principal] }] }, { expectedRevision: 0 });
   await setup.stop(); setup.close();
   const client = serviceClient({ projectRoot: root, open });
   const material = await client.createMaterialSnapshot({ sourceId: 'inputs' });
   const started = await startRun({ root, id: 'report', client, materials: { sources: [{ id: 'inputs', snapshotId: material.id, digest: material.digest, source: material.source }] } });
   assert.equal(started.action, 'opened', JSON.stringify(started));
+  if (hasHostFacts) assert.equal(started.contextSync.status, 'synced', JSON.stringify(started));
   fs.writeFileSync(path.join(root, 'source.md'), 'Later source content must not be consumed.');
   const worker = open(root);
   try {
@@ -62,6 +66,24 @@ test('candidate SDK preserves frozen materials through preparation and longrun-o
   } finally { await worker.stop(); worker.close(); }
   const collected = await collectTask({ root, id: 'report', client });
   assert.equal(collected.record?.status, 'settled', JSON.stringify(collected));
+  if (hasHostFacts) {
+    assert.equal(collected.contextSync.status, 'synced', JSON.stringify(collected));
+    const observer = open(root);
+    try {
+      assert.deepEqual(observer.getDetailed(started.ticketId).hostReference, { producer: 'js-longrun', taskId: 'report', runId: 'R0001', kind: 'round' });
+      const facts = observer.listHostFacts({ producer: 'js-longrun' });
+      assert.equal(facts.find(row => row.scope === 'project').facts.running, null);
+      const outcome = facts.find(row => row.scope === 'ticket');
+      assert.equal(outcome.facts.status, 'settled'); assert.equal(outcome.facts.result.settlement, 'applied');
+      assert.equal(outcome.domainId, observer.getDetailed(started.ticketId).domainId);
+      assert.equal(outcome.assignmentId, observer.getDetailed(started.ticketId).assignmentId);
+      assert.equal(collected.record.assignmentId, outcome.assignmentId);
+    } finally { await observer.stop(); observer.close(); }
+    assert.equal((await syncProjectFacts({ root, client })).status, 'synced');
+    const unavailable = await syncProjectFacts({ root, client, routes: { list() { throw new Error('transient fixture read failure'); } } });
+    assert.equal(unavailable.status, 'pending');
+    assert.equal((await syncProjectFacts({ root, client })).status, 'synced', 'inventory recovery needs no source modification');
+  }
   assert.equal(runs, 2);
   assert.equal(fs.readFileSync(path.join(root, 'source.md'), 'utf8'), 'Later source content must not be consumed.');
   assert.match(fs.readFileSync(path.join(taskPaths(root, 'report').artifacts, 'reports/R0001.md'), 'utf8'), /Frozen original fact/);

@@ -104,6 +104,8 @@ Feishu is provided by the existing js-superagent operator channel. The host save
 
 **Worker completion and business settlement are separate facts.** Collection also works through `tick` or manual `collect`. Repeated events and concurrent collectors use the same lock and settlement record. Multi-file settlement is recoverable and conflict-aware; it is not a distributed exactly-once transaction.
 
+On a host advertising context capabilities version 1, the same collection paths also project the project's active tasks, next due times and completed business outcomes for its coordinator. This lets a project conversation account for work already underway and distinguish an expired review from a user cancellation. Longrun still owns the task records and decisions; the host stores a query copy. Unsupported hosts continue normal execution with an explicit `contextSync: unavailable` diagnostic. See [host context integration](docs/integration.md#host-context-projection).
+
 Re-review uses source-run identities and frozen original evidence:
 
 ```sh

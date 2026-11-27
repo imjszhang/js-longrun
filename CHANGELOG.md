@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Project task overviews and ticket business outcomes into the capable host's context store without moving authority out of longrun. Include active, cooling, disabled and unavailable tasks and distinguish a stopped Worker from applied settlement.
+- Bind new submissions to an immutable host reference; preserve original ticket generations when projecting old outcomes. Pass precise queue, execution, preparation, review and invalid-result stop provenance with the observed generation.
+- Reconcile derived context through existing startup, watcher, tick and manual collection paths, including idle tasks. Context failures have a separate diagnostic and never resubmit or recollect work; offline task definition commands remain offline.
+- Export pure `js-longrun/context` builders and trusted host routes. Capability absence remains compatible with older peers, while unavailable or stale context is explicit.
+- Add fictional lifecycle, retry, old-peer, generation, provenance and SDK material/context integration coverage. No production history migration or new execution policy.
+
 ## 0.2.0-alpha.0 — Unreleased candidate
 
 - Configure a project-relative task root through one validated layout, freeze paths in new runs, and retain legacy contract hashes and recoverable settlement.
