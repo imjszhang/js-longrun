@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0-alpha.3 — 2026-11-28
+
+- Keep complete v2 process identities usable when hostname lookup fails or returns no name; diagnostics no longer control identity capture or prior-boot recovery.
+- Make the legacy PID 1 boot-display probe optional for v2 ownership. Stable machine, boot-session and namespace evidence remains mandatory; legacy receipts still fail closed when their old locality evidence is unavailable.
+- Add regression coverage for missing hostname diagnostics, legacy boot-display failure and mandatory stable boot evidence. No task state, service settings or existing receipts are rewritten.
+
 ## 0.2.0-alpha.2 — 2026-11-28
 
 - Identify service owners by scoped machine digest, OS boot session, PID namespace, process start and user identity; hostname is diagnostic only. Same-machine prior boots and reused PIDs no longer block recovery.
