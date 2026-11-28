@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0-alpha.2 — 2026-11-28
+
+- Identify service owners by scoped machine digest, OS boot session, PID namespace, process start and user identity; hostname is diagnostic only. Same-machine prior boots and reused PIDs no longer block recovery.
+- Accept verified same-boot legacy owners after hostname changes, while refusing foreign, incomplete or ambiguous legacy evidence. No task-state or receipt rewriting is required.
+- Check watcher and tick ownership before changing stop intent or disabling services. Recheck ownership immediately before signalling; unknown owners fail closed without an initial partial stop.
+- Add hostname-change, reboot, PID-reuse, probe-failure, legacy-compatibility and service-management regression coverage on macOS and Linux.
+
 ## 0.2.0-alpha.1 — 2026-11-27
 
 - Project task overviews and ticket business outcomes into the capable host's context store without moving authority out of longrun. Include active, cooling, disabled and unavailable tasks and distinguish a stopped Worker from applied settlement.

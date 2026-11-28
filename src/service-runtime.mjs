@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { processIdentity, ownerState } from './process-identity.mjs';
+export { processIdentity, ownerState } from './process-identity.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
 // Native lock handles must survive suspended async frames until explicit release.
@@ -101,24 +102,6 @@ export function acquireRuntimeLock(layout, name) {
   activeRuntimeConnections.add(db);
   let closed = false;
   return () => { if (closed) return; closed = true; try { db.exec('ROLLBACK'); } finally { try { db.close(); } finally { activeRuntimeConnections.delete(db); } } };
-}
-
-export function processIdentity(pid = process.pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
-  try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return null; return { pid, unknown: true }; }
-  const birth = spawnSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', timeout: 5000 });
-  const uid = spawnSync('/bin/ps', ['-p', String(pid), '-o', 'uid='], { encoding: 'utf8', timeout: 5000 });
-  const boot = spawnSync('/bin/ps', ['-p', '1', '-o', 'lstart='], { encoding: 'utf8', timeout: 5000 });
-  if (birth.status !== 0 || uid.status !== 0 || boot.status !== 0 || !boot.stdout.trim() || !birth.stdout.trim() || !/^\d+$/.test(uid.stdout.trim())) return { pid, unknown: true };
-  return { pid, birth: birth.stdout.trim(), uid: Number(uid.stdout.trim()), host: os.hostname(), boot: boot.stdout.trim() };
-}
-
-export function ownerState(owner, probe = processIdentity) {
-  if (!owner) return { state: 'unobserved' };
-  const current = probe(owner.pid);
-  if (!current) return { state: 'exited' };
-  if (current.unknown || !owner.birth || current.birth !== owner.birth || current.uid !== owner.uid || current.host !== owner.host || current.boot !== owner.boot) return { state: 'unknown', pid: owner.pid };
-  return { state: 'alive', pid: owner.pid };
 }
 
 function ownProcess(layout, kind) {

@@ -102,3 +102,11 @@ Logs are bounded to approximately 5 MiB per stream, retaining a recent tail; act
 5. Check ownership/readiness and startup catch-up. Validate the timer by allowing a real scheduled occurrence in an isolated test task. Validate card answers through the existing channel and record answer, Worker completion and automatic settlement times; do not manually collect and label that an immediate-settlement test.
 
 Before new business writes, rollback can restore the earlier stopped deployment. After new answers or settlements arrive, preserve those facts; restoring an old task backup or downgrading solely because the schema number is unchanged is unsafe. This release does not migrate active task roots, promise zero-downtime replacement, or create a replacement ticket to hide a failed transition.
+
+## Process identity and legacy deployments
+
+From 0.2.0-alpha.2, new owner receipts use identity version 2: an application-scoped machine digest, OS boot-session ID, PID namespace, PID, process start and UID. Hostname is diagnostic and may change while the service runs. A receipt from an earlier boot of the same machine is exited; foreign machines, unknown namespaces and incomplete evidence remain unverified. Raw machine identifiers are not stored.
+
+Legacy receipts remain readable. A same-boot owner with matching PID, start time and UID can be verified after a hostname change. A simultaneous hostname change and reboot cannot establish locality from a legacy receipt and remains unknown; do not delete locks or fabricate owner records. Stop/restart preflight both watcher and tick before changing running intent or disabling jobs, and recheck identity before signalling.
+
+To recover a running legacy deployment whose hostname changed, use the new release's service manager to stop and uninstall the existing registration (preserving original installation options and all task records), then install and start the new release through the existing project wrapper. Do not replace a globally shared package while any dependent service is running. Unknown ownership must be investigated rather than bypassed.
