@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.4 — 2026-11-28
 
 - Support `minIntervalMinutes` and `intervalMinutes` for task cadence, with a five-minute minimum and exclusive hour/minute units. Keep existing integer-hour definitions and frozen runs compatible.
 - Preserve the `minIntervalHours: 72` default for existing callers. Retain saved due times and use frozen cadence during settlement and recovery.

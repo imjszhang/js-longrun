@@ -1,6 +1,6 @@
 # Release preparation
 
-The current release version is `0.2.0-alpha.1`, targeting the `alpha` tag. The package is MIT licensed and requires Node 22.13+. Legacy task contracts support `js-superagent@^0.14.0-alpha.1`; the material contract additionally supports `^0.15.0-alpha.0` and requires version-1 material capabilities with schema 15. The optional host-facts protocol requires a version-1 host capability, available in `js-superagent@0.15.0-alpha.16`. This is an early release, not a stable compatibility promise.
+The current release version is `0.2.0-alpha.4`, targeting the `alpha` tag. The package is MIT licensed and requires Node 22.13+. Legacy task contracts support `js-superagent@^0.14.0-alpha.1`; the material contract additionally supports `^0.15.0-alpha.0` and requires version-1 material capabilities with schema 15. The optional host-facts protocol requires a version-1 host capability, available in `js-superagent@0.15.0-alpha.16`. This is an early release, not a stable compatibility promise.
 
 From a clean checkout:
 
@@ -9,7 +9,7 @@ npm ci --ignore-scripts
 npm run release:prepare
 ```
 
-This validates metadata and lock consistency, runs unit/integration/CLI tests, checks a tarball in a fresh consumer, and creates `release/js-longrun-0.2.0-alpha.1.tgz` and `release/manifest.json`. The manifest records SHA-512 integrity, source commit and dirty status. Commit and push changes, then regenerate the final candidate and require `sourceDirty: false`. CI checks minimum Node 22.13 and Node 24. No preparation command publishes anything.
+This validates metadata and lock consistency, runs unit/integration/CLI tests, checks a tarball in a fresh consumer, and creates `release/js-longrun-0.2.0-alpha.4.tgz` and `release/manifest.json`. The manifest records SHA-512 integrity, source commit and dirty status. Commit and push changes, then regenerate the final candidate and require `sourceDirty: false`. CI checks minimum Node 22.13 and Node 24. No preparation command publishes anything.
 
 The locked development dependency remains the published 0.14.0-alpha.1 compatibility baseline. Also run the new-contract matrix against the reviewed 0.15 SDK candidate (prefer its unpacked package entrypoint in a temporary consumer):
 
@@ -26,7 +26,7 @@ For the host-context matrix, set `JS_LONGRUN_CONTEXT_SDK=/absolute/path/to/candi
 
 All subsequent npm releases use GitHub trusted publishing, following the js-superagent release model. Do not run local npm publish or ask for per-release browser authorization. Do not fall back to long-lived npm tokens.
 
-Dispatch `gh workflow run publish.yml --ref main -f version=0.2.0-alpha.1` only for an authorized release. The macOS preparation job runs release checks; the separate Linux job publishes the verified archive with OIDC and provenance. It validates the clean workflow SHA, package/lock versions and archive integrity. Existing identical versions are verified without republishing; uncertain registry responses never trigger blind retries.
+Dispatch `gh workflow run publish.yml --ref main -f version=0.2.0-alpha.4` only for an authorized release. The macOS preparation job runs release checks; the separate Linux job publishes the verified archive with OIDC and provenance. It validates the clean workflow SHA, package/lock versions and archive integrity. Existing identical versions are verified without republishing; uncertain registry responses never trigger blind retries.
 
 The one-time npm binding is package `js-longrun`, repository `imjszhang/js-longrun`, workflow `publish.yml`, environment `npm`, with direct publish enabled. The GitHub environment allows only main, with no per-release reviewer or wait timer. Configuring this binding can require one-time account verification. Normal pushes do not publish.
 

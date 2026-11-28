@@ -1,6 +1,6 @@
 {
   "name": "js-longrun",
-  "version": "0.2.0-alpha.3",
+  "version": "0.2.0-alpha.4",
   "description": "Persistent long-running task orchestration, review and settlement for js-superagent.",
   "type": "module",
   "license": "MIT",

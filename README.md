@@ -49,7 +49,7 @@ npx --no-install js-longrun status weekly-report
 
 The current working directory is the project unless `--project` is supplied. Task IDs and data are scoped to that project; installation location is never used as the project root.
 
-Task cadence supports integer minutes starting at **5 minutes**. Set `trigger.minIntervalMinutes` for an `after-settlement` delay, or `trigger.intervalMinutes` with a timezone-qualified `anchor` for a `fixed-interval` schedule. For example, `intervalMinutes: 30` schedules half-hour slots. Existing integer-hour definitions remain supported, with exactly one unit allowed per trigger. Generated defaults retain `minIntervalHours: 72` for existing callers. This feature requires the updated runtime; published releases through `0.2.0-alpha.3` accept hour fields only. See [cadence and compatibility](docs/operation.md#definitions-and-cadence).
+Task cadence supports integer minutes starting at **5 minutes**. Set `trigger.minIntervalMinutes` for an `after-settlement` delay, or `trigger.intervalMinutes` with a timezone-qualified `anchor` for a `fixed-interval` schedule. For example, `intervalMinutes: 30` schedules half-hour slots. Existing integer-hour definitions remain supported, with exactly one unit allowed per trigger. Generated defaults retain `minIntervalHours: 72` for existing callers. Minute fields require `0.2.0-alpha.4` or newer; earlier releases accept hour fields only. See [cadence and compatibility](docs/operation.md#definitions-and-cadence).
 
 ## Configure storage and manage the background service
 

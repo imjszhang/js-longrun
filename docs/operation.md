@@ -29,7 +29,7 @@ For example, use either of these `trigger` objects in `task.json`:
 { "kind": "fixed-interval", "intervalMinutes": 30, "anchor": "2026-12-01T09:00:00+08:00", "timezone": "Asia/Shanghai" }
 ```
 
-New `design`/`create` defaults retain `minIntervalHours: 72` and the existing 72-hour delay. To select a minute cadence, replace that hour field with `minIntervalMinutes`. Minute fields require a runtime with this feature; releases through `0.2.0-alpha.3` reject them. Upgrading preserves existing hour definitions and frozen run bytes. An in-flight run computes its next due time from its frozen definition. Editing the current definition or pausing/resuming does not recalculate an already saved `nextDueAt`.
+New `design`/`create` defaults retain `minIntervalHours: 72` and the existing 72-hour delay. To select a minute cadence, replace that hour field with `minIntervalMinutes`. Minute fields require `0.2.0-alpha.4` or newer; releases through `0.2.0-alpha.3` reject them. Upgrading preserves existing hour definitions and frozen run bytes. An in-flight run computes its next due time from its frozen definition. Editing the current definition or pausing/resuming does not recalculate an already saved `nextDueAt`.
 
 Configure the project's timer to check often enough for the chosen cadence. For a five-minute task, install it with `--interval-seconds 300 --open-rounds true`, then enable the task and start the service within the authorized deployment. The default timer checks hourly. Sleep, logout, an active run and quota gates can delay the next run; task cadence specifies when it becomes eligible.
 
