@@ -26,15 +26,17 @@ export function readNativeMachineId(platform = process.platform, read = readFile
   return `sha256:${createHash('sha256').update(`js-longrun/process-machine/v1\0${platform}\0${raw.toLowerCase()}`).digest('hex')}`;
 }
 
-function nativeScope() {
-  const linux = process.platform === 'linux';
-  return {
-    machineId: readNativeMachineId(),
-    bootSessionId: (linux ? readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() : run('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'])).toLowerCase(),
-    pidNamespace: linux ? readlinkSync('/proc/self/ns/pid') : 'host',
-    // Retained only to compare pre-v2 receipts; v2 uses the immutable boot UUID.
-    boot: run('/bin/ps', ['-p', '1', '-o', 'lstart=']),
+export function readNativeScope(platform = process.platform, read = readFileSync, link = readlinkSync, command = run) {
+  const linux = platform === 'linux';
+  const scope = {
+    machineId: readNativeMachineId(platform, read, command),
+    bootSessionId: (linux ? read('/proc/sys/kernel/random/boot_id', 'utf8').trim() : command('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'])).toLowerCase(),
+    pidNamespace: linux ? link('/proc/self/ns/pid') : 'host',
   };
+  // This display timestamp is legacy evidence only. Its absence must not discard
+  // the stable v2 scope; old receipts still fail closed without it.
+  try { scope.boot = command('/bin/ps', ['-p', '1', '-o', 'lstart=']); } catch { /* Legacy evidence unavailable. */ }
+  return scope;
 }
 
 function nativeProcessInfo(pid) {
@@ -48,9 +50,14 @@ function nativeProcessInfo(pid) {
 }
 
 /** Injectable probes keep missing evidence distinct from an absent process. */
-export function createProcessIdentityInspector({ scope = nativeScope, processInfo = nativeProcessInfo, host = hostname } = {}) {
+export function createProcessIdentityInspector({ scope = readNativeScope, processInfo = nativeProcessInfo, host = hostname } = {}) {
   const readScope = () => {
-    try { const value = scope(); return validScope(value) ? { ...value, host: host() } : undefined; } catch { return undefined; }
+    let value;
+    try { value = scope(); } catch { return undefined; }
+    if (!validScope(value)) return undefined;
+    let diagnosticHost;
+    try { const name = host(); if (text(name)) diagnosticHost = name; } catch { /* Hostname is not v2 identity evidence. */ }
+    return { ...value, host: diagnosticHost };
   };
   const processIdentity = (pid = process.pid) => {
     if (!positive(pid)) return null;

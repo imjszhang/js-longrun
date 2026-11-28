@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createProcessIdentityInspector, ownerState, processIdentity, readNativeMachineId } from '../src/process-identity.mjs';
+import { createProcessIdentityInspector, ownerState, processIdentity, readNativeMachineId, readNativeScope } from '../src/process-identity.mjs';
 
 const bootA = '12345678-1234-1234-1234-123456789abc';
 const bootB = '87654321-4321-4321-4321-cba987654321';
@@ -126,4 +126,40 @@ test('native current process capture and ownership use the complete v2 identity'
   assert.equal(identity.uid, process.getuid());
   assert.equal(ownerState({ ...identity, host: 'renamed-diagnostic-only' }).state, 'alive');
   assert.equal(processIdentity(-1), null);
+});
+
+
+test('unavailable diagnostic hostname does not block v2 capture, ownership or prior-boot recovery', () => {
+  for (const host of [() => { throw Error('hostname unavailable'); }, () => '', () => undefined]) {
+    const probe = inspector({ host });
+    const captured = probe.processIdentity(info.pid);
+    assert.equal(captured.identityVersion, 2);
+    assert.equal(captured.host, undefined);
+    assert.equal(probe.ownerState(v2).state, 'alive');
+    assert.equal(probe.ownerState(captured).state, 'alive');
+    assert.equal(inspector({ host, scope: () => ({ ...scope, bootSessionId: bootB }) }).ownerState(v2).state, 'exited');
+    assert.equal(probe.ownerState(legacy).state, 'unknown', 'legacy receipts still need their old locality evidence');
+  }
+});
+
+test('legacy boot-display probe failure does not discard native stable scope', () => {
+  const command = file => {
+    if (file === '/usr/sbin/ioreg') return '\"IOPlatformUUID\" = \"12345678-1234-1234-1234-123456789abc\"';
+    if (file === '/usr/sbin/sysctl') return bootA;
+    throw Error('legacy ps PID 1 unavailable');
+  };
+  const current = readNativeScope('darwin', undefined, undefined, command);
+  assert.equal(current.boot, undefined);
+  assert.equal(current.bootSessionId, bootA);
+  assert.equal(current.pidNamespace, 'host');
+  assert.match(current.machineId, /^sha256:[a-f\d]{64}$/);
+  const probe = inspector({ scope: () => current });
+  const captured = probe.processIdentity(info.pid);
+  assert.equal(captured.identityVersion, 2);
+  assert.equal(probe.ownerState(captured).state, 'alive');
+  assert.equal(probe.ownerState(legacy).state, 'unknown');
+  assert.throws(() => readNativeScope('darwin', undefined, undefined, file => {
+    if (file === '/usr/sbin/sysctl') throw Error('boot UUID unavailable');
+    return command(file);
+  }), /boot UUID unavailable/, 'stable evidence remains mandatory');
 });
