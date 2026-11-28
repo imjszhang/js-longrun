@@ -87,7 +87,7 @@ export function createLongrunServiceManager(options = {}, dependencies = {}) {
     const owner = readOwner(kind), process = ownerState(owner, probe);
     // A loaded PID without a matching receipt is not safe to stop or replace.
     if (launchState.pid && (process.state !== 'alive' || launchState.pid !== owner?.pid)) {
-      if (!probe(launchState.pid)) return { state: 'exited', pid: launchState.pid, owner };
+      if (process.state !== 'unknown' && !probe(launchState.pid)) return { state: 'exited', pid: launchState.pid, owner };
       return { state: 'unknown', pid: launchState.pid, owner };
     }
     return { ...process, owner };
@@ -258,11 +258,22 @@ export function createLongrunServiceManager(options = {}, dependencies = {}) {
   }
   async function stopControlled() {
     const value = manifest(true); assertOwnedFiles(value);
+    // Check both owners before changing intent or disabling either launch job.
+    // A failed verification must leave a running deployment operable.
+    const before = Object.fromEntries(['watch', 'tick'].map(kind => [kind, processReport(kind)]));
+    if (Object.values(before).some(state => state.state === 'unknown')) {
+      throw serviceError('LONGRUN_UNKNOWN_OWNER', 'Refusing to stop a deployment with unverified process ownership');
+    }
+    const stoppingOwners = Object.fromEntries(Object.entries(before).map(([kind, state]) => [kind, state.owner]));
     writeRuntimeJSON(layout.manifestPath, { ...value, intent: 'stopped', intentToken: randomUUID(), stoppedRequestedAt: new Date(now()).toISOString() });
     for (const kind of ['tick', 'watch']) launch(['disable', `${domain}/${labels[kind]}`]);
-    const stoppingOwners = Object.fromEntries(['watch', 'tick'].map(kind => [kind, readOwner(kind)]));
+    // Recheck after launchctl calls: preflight evidence is not authority to signal
+    // a replacement process or a different owner generation.
     const watch = processReport('watch');
-    if (watch.state === 'unknown') throw serviceError('LONGRUN_UNKNOWN_OWNER', 'Refusing to signal an unverified watcher');
+    if (watch.state === 'unknown' || (watch.state === 'alive' &&
+      (watch.owner.pid !== stoppingOwners.watch?.pid || watch.owner.runId !== stoppingOwners.watch?.runId))) {
+      throw serviceError('LONGRUN_UNKNOWN_OWNER', 'Refusing to signal an unverified or replaced watcher');
+    }
     if (watch.state === 'alive') signal(watch.owner.pid, 'SIGTERM');
     const deadline = now() + timeoutMs;
     while (true) {

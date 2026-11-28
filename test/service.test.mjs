@@ -19,12 +19,15 @@ function fixture(t) {
 function files(root) { return fs.readdirSync(root, { recursive: true }).sort(); }
 function harness(options) {
   const jobs = new Map(), alive = new Map(), calls = [], signals = [];
-  let time = Date.now(), nextPid = 41000, onSleep = () => {};
+  let time = Date.now(), nextPid = 41000, onSleep = () => {}, onLaunch = () => {};
+  const scope = { machineId: `sha256:${'1'.repeat(64)}`, bootSessionId: '11111111-1111-4111-8111-111111111111', pidNamespace: 'host', boot: 'Fri Nov 27 12:00:00 2026', host: 'test-host' };
+  const identity = pid => ({ identityVersion: 2, ...scope, pid, birth: `birth-${pid}`, uid: 501 });
+  const processIdentity = Object.assign(pid => alive.get(pid) ?? null, { scope: () => ({ ...scope }) });
   const dependencies = {
-    platform: 'darwin', uid: 501, now: () => time, processIdentity: pid => alive.get(pid) ?? null,
+    platform: 'darwin', uid: 501, now: () => time, processIdentity,
     superagent: { createServiceManager: () => ({ health: () => ({ state: 'healthy', healthy: true }) }) },
     runLaunchctl(args) {
-      calls.push(args);
+      calls.push(args); onLaunch(args);
       const action = args[0], label = args[1]?.split('/').at(-1);
       if (action === 'print') {
         const job = jobs.get(label);
@@ -33,12 +36,12 @@ function harness(options) {
       if (action === 'bootstrap') {
         const text = fs.readFileSync(args[2], 'utf8'), installedLabel = /<key>Label<\/key><string>([^<]+)/.exec(text)[1];
         if (installedLabel.endsWith('.watch')) {
-          const pid = nextPid++; jobs.set(installedLabel, { pid }); alive.set(pid, { pid, birth: `birth-${pid}`, uid: 501, host: 'test-host' });
+          const pid = nextPid++; jobs.set(installedLabel, { pid }); alive.set(pid, identity(pid));
         } else jobs.set(installedLabel, { pid: null });
       }
       if (action === 'bootout') jobs.delete(label);
       if (action === 'kickstart') {
-        const pid = nextPid++; jobs.set(label, { pid }); alive.set(pid, { pid, birth: `birth-${pid}`, uid: 501, host: 'test-host' });
+        const pid = nextPid++; jobs.set(label, { pid }); alive.set(pid, identity(pid));
       }
       return { status: 0, stdout: '' };
     },
@@ -49,15 +52,15 @@ function harness(options) {
   function receipt(kind, { phase = kind === 'watch' ? 'ready' : 'running', pid } = {}) {
     const label = manager.status().labels[kind];
     pid ??= jobs.get(label)?.pid ?? nextPid++;
-    const identity = alive.get(pid) ?? { pid, birth: `birth-${pid}`, uid: 501, host: 'test-host' };
-    alive.set(pid, identity);
-    const owner = { schemaVersion: 1, ...identity, projectRoot: manager.layout.projectRoot, runtimeDir: manager.layout.runtimeDir,
+    const current = alive.get(pid) ?? identity(pid);
+    alive.set(pid, current);
+    const owner = { schemaVersion: 1, ...current, projectRoot: manager.layout.projectRoot, runtimeDir: manager.layout.runtimeDir,
       kind, runId: `run-${pid}`, at: new Date(time).toISOString() };
     writeRuntimeJSON(kind === 'watch' ? manager.layout.ownerPath : manager.layout.tickOwnerPath, owner);
     writeRuntimeJSON(kind === 'watch' ? manager.layout.watchPath : manager.layout.tickPath, { ...owner, phase, heartbeatAt: new Date(time).toISOString(), sequence: 1, startedAt: new Date(time).toISOString(), lastCheckAt: new Date(time).toISOString() });
     return owner;
   }
-  return { manager, jobs, alive, calls, signals, receipt, dependencies, setOnSleep(fn) { onSleep = fn; }, advance(ms) { time += ms; } };
+  return { manager, jobs, alive, calls, signals, receipt, dependencies, scope, setOnLaunch(fn) { onLaunch = fn; }, setOnSleep(fn) { onSleep = fn; }, advance(ms) { time += ms; } };
 }
 
 test('status, health and logs on an uninstalled project create no runtime or SDK state', async t => {
@@ -107,7 +110,78 @@ test('PID without owner is never signalled or reported ready', async t => {
   await assert.rejects(h.manager.start(), { code: 'LONGRUN_UNKNOWN_OWNER' });
   assert.equal((await h.manager.health()).healthy, false);
   await assert.rejects(h.manager.stop(), { code: 'LONGRUN_UNKNOWN_OWNER' });
-  assert.equal(h.manager.status().intent, 'stopped'); assert.deepEqual(h.signals, []);
+  assert.equal(h.manager.status().intent, 'running'); assert.deepEqual(h.signals, []);
+});
+
+for (const legacy of [false, true]) test(`${legacy ? 'legacy' : 'v2'} watcher stays healthy and stoppable after hostname changes`, async t => {
+  const h = harness(fixture(t)); await h.manager.install(); h.setOnSleep(() => h.receipt('watch'));
+  const running = await h.manager.start();
+  const owner = readRuntimeJSON(h.manager.layout.ownerPath);
+  if (legacy) {
+    for (const key of ['identityVersion', 'machineId', 'bootSessionId', 'pidNamespace']) delete owner[key];
+    writeRuntimeJSON(h.manager.layout.ownerPath, owner);
+  }
+  h.scope.host = 'renamed-host';
+  h.alive.set(owner.pid, { ...h.alive.get(owner.pid), host: h.scope.host });
+  const manifest = readRuntimeJSON(h.manager.layout.manifestPath), calls = h.calls.length;
+  assert.equal((await h.manager.health()).healthy, true);
+  assert.equal((await h.manager.start()).watch.pid, running.watch.pid);
+  assert.deepEqual(readRuntimeJSON(h.manager.layout.manifestPath), manifest);
+  assert.ok(h.calls.slice(calls).every(([command]) => command === 'print'));
+  h.setOnSleep(() => { h.alive.delete(owner.pid); fs.unlinkSync(h.manager.layout.ownerPath); });
+  assert.equal((await h.manager.stop()).intent, 'stopped');
+  assert.deepEqual(h.signals, [{ pid: owner.pid, kind: 'SIGTERM' }]);
+});
+
+for (const kind of ['watch', 'tick']) for (const operation of ['stop', 'restart']) {
+  test(`${operation} rejects unknown ${kind} ownership before changing intent or launch jobs`, async t => {
+    const h = harness(fixture(t)); await h.manager.install(); h.setOnSleep(() => h.receipt('watch'));
+    await h.manager.start();
+    const owner = kind === 'watch' ? readRuntimeJSON(h.manager.layout.ownerPath) : h.receipt('tick');
+    const file = kind === 'watch' ? h.manager.layout.ownerPath : h.manager.layout.tickOwnerPath;
+    writeRuntimeJSON(file, { ...owner, machineId: `sha256:${'2'.repeat(64)}` });
+    const manifest = fs.readFileSync(h.manager.layout.manifestPath), calls = h.calls.length;
+    await assert.rejects(h.manager[operation](), { code: 'LONGRUN_UNKNOWN_OWNER' });
+    assert.deepEqual(fs.readFileSync(h.manager.layout.manifestPath), manifest);
+    assert.ok(h.calls.slice(calls).every(([command]) => command === 'print'));
+    assert.deepEqual(h.signals, []);
+  });
+}
+
+test('foreign owner remains unknown even when its launch PID is absent locally', async t => {
+  const h = harness(fixture(t)); await h.manager.install(); h.setOnSleep(() => h.receipt('watch'));
+  await h.manager.start();
+  const owner = readRuntimeJSON(h.manager.layout.ownerPath);
+  writeRuntimeJSON(h.manager.layout.ownerPath, { ...owner, machineId: `sha256:${'2'.repeat(64)}` });
+  h.alive.delete(owner.pid);
+  assert.equal(h.manager.status().watch.process, 'unknown');
+  await assert.rejects(h.manager.stop(), { code: 'LONGRUN_UNKNOWN_OWNER' });
+  assert.deepEqual(h.signals, []);
+});
+
+for (const changed of ['process', 'generation']) test(`stop rechecks ${changed} after launchctl before signalling`, async t => {
+  const h = harness(fixture(t)); await h.manager.install(); h.setOnSleep(() => h.receipt('watch'));
+  await h.manager.start(); const owner = readRuntimeJSON(h.manager.layout.ownerPath);
+  h.setOnLaunch(([command]) => {
+    if (command !== 'disable') return;
+    if (changed === 'process') h.alive.set(owner.pid, { ...h.alive.get(owner.pid), birth: 'new-process-birth' });
+    else writeRuntimeJSON(h.manager.layout.ownerPath, { ...owner, runId: 'replacement-generation' });
+  });
+  await assert.rejects(h.manager.stop(), { code: 'LONGRUN_UNKNOWN_OWNER' });
+  assert.deepEqual(h.signals, []);
+  assert.equal(h.manager.status().intent, 'stopped');
+});
+
+test('same-machine reboot permits a new watcher without signalling a stale v2 receipt', async t => {
+  const h = harness(fixture(t)); await h.manager.install(); h.setOnSleep(() => h.receipt('watch'));
+  const previous = await h.manager.start();
+  h.scope.bootSessionId = '22222222-2222-4222-8222-222222222222';
+  h.scope.boot = 'Sat Nov 28 12:00:00 2026'; h.scope.host = 'renamed-after-reboot';
+  h.alive.clear(); h.jobs.set(previous.labels.watch, { pid: null });
+  const ready = await h.manager.start();
+  assert.notEqual(ready.watch.pid, previous.watch.pid);
+  assert.equal(ready.watch.process, 'alive'); assert.equal((await h.manager.health()).healthy, true);
+  assert.deepEqual(h.signals, []);
 });
 
 test('start waits for an already-owned starting watcher without replacing the process or resetting running intent', async t => {
