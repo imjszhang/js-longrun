@@ -33,6 +33,8 @@ The service backend currently supports macOS user LaunchAgents. Other platforms 
 
 `install` writes a stopped deployment. `start` loads one persistent watcher and one periodic tick. Neither operation changes task controls. `--open-rounds true` permits the timer to open only already-enabled, eligible tasks through existing cadence/quota gates; its default is false. The watcher only collects. The timer is hourly by default, does not run immediately on load, and does not replay every missed interval after sleep.
 
+Tasks can specify an interval of at least five minutes through `trigger.minIntervalMinutes` or `trigger.intervalMinutes`. Match the service check interval to the shortest required task cadence, for example `service install --interval-seconds 300 --open-rounds true` for five-minute checks. For an installed deployment, stop and reinstall through its existing wrapper with the saved options and the new check interval, then restore its authorized running intent. Task due times, quotas and active-run gates continue to control which checks open work. See [cadence configuration](operation.md#definitions-and-cadence).
+
 Projects with business routes must retain their own wrapper:
 
 ```sh

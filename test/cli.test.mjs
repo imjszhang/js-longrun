@@ -85,6 +85,21 @@ test('host CLI injection retains custom routes and always passes the consuming p
   assert.equal(types[0][0].id, 'host@1');
 });
 
+test('CLI create, validate and plan retain a five-minute definition', t => {
+  const f = fixture(t), command = (...args) => f.run('--project', f.root, ...args);
+  const design = JSON.parse(ok(command('design', 'frequent-report')));
+  assert.equal(design.definition.trigger.minIntervalHours, 72);
+  design.definition.trigger = { kind: 'fixed-interval', intervalMinutes: 5, anchor: '2026-11-09T00:00:00Z', timezone: 'UTC' };
+  const definitionPath = path.join(f.root, 'five-minute.json');
+  fs.writeFileSync(definitionPath, JSON.stringify(design.definition));
+  const created = JSON.parse(ok(command('create', 'frequent-report', '--goal', 'Summarize local changes', '--definition', definitionPath)));
+  assert.deepEqual(created.definition.trigger, design.definition.trigger);
+  ok(command('validate', 'frequent-report'));
+  const plan = JSON.parse(ok(command('plan', 'frequent-report')));
+  assert.deepEqual(plan.definition.trigger, design.definition.trigger);
+  assert.equal(fs.existsSync(path.join(f.root, '.service-home')), false);
+});
+
 test('service status and health are read-only on an uninstalled project', t => {
   const f = fixture(t), before = fs.readdirSync(f.root);
   for (const action of ['status', 'health']) {

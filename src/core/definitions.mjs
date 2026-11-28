@@ -39,6 +39,16 @@ function atomicJson(file, value) {
 }
 function validDate(value) { return typeof value === 'string' && /^\d{4}-\d\d-\d\dT/.test(value) && Number.isFinite(Date.parse(value)); }
 function integer(value, min, max) { return Number.isSafeInteger(value) && value >= min && value <= max; }
+function validateInterval(trigger, minutesKey, hoursKey, errors) {
+  const hasMinutes = minutesKey in trigger, hasHours = hoursKey in trigger;
+  if (hasMinutes === hasHours) {
+    errors.push(`${minutesKey} / ${hoursKey} 必须且只能设置一个`);
+  } else if (hasMinutes) {
+    if (!integer(trigger[minutesKey], 5, 5_256_000)) errors.push(`${minutesKey} 必须为 5–5256000 整数分钟`);
+  } else if (!integer(trigger[hoursKey], 1, 87600)) {
+    errors.push(`${hoursKey} 必须为 1–87600 整数小时`);
+  }
+}
 
 export function defaultDefinition(id, type = 'change-report@1') {
   assertTaskId(id);
@@ -69,15 +79,16 @@ export function validateDefinition(definition) {
   if (!integer(d.revision, 1, 1_000_000)) errors.push('revision 必须为正整数');
   if (d.brief !== 'task.md') errors.push('brief 必须为 task.md');
   if (checkKeys(d.completion, ['kind'], 'completion') && d.completion.kind !== 'until-disabled') errors.push('completion 仅支持 until-disabled');
-  if (checkKeys(d.trigger, ['kind', 'minIntervalHours', 'timezone', 'intervalHours', 'anchor'], 'trigger')) {
+  if (checkKeys(d.trigger, ['kind', 'minIntervalMinutes', 'minIntervalHours', 'timezone', 'intervalMinutes', 'intervalHours', 'anchor'], 'trigger')) {
     try { new Intl.DateTimeFormat('en', { timeZone: d.trigger.timezone }).format(); if (typeof d.trigger.timezone !== 'string' || !d.trigger.timezone) throw new Error(); }
     catch { errors.push('trigger.timezone 必须为有效时区'); }
     if (d.trigger.kind === 'after-settlement') {
-      if (!integer(d.trigger.minIntervalHours, 1, 87600)) errors.push('minIntervalHours 必须为 1–87600 小时');
-      if ('intervalHours' in d.trigger || 'anchor' in d.trigger) errors.push('after-settlement 不接受 intervalHours / anchor');
+      validateInterval(d.trigger, 'minIntervalMinutes', 'minIntervalHours', errors);
+      if ('intervalMinutes' in d.trigger || 'intervalHours' in d.trigger || 'anchor' in d.trigger) errors.push('after-settlement 不接受 intervalMinutes / intervalHours / anchor');
     } else if (d.trigger.kind === 'fixed-interval') {
-      if (!integer(d.trigger.intervalHours, 1, 87600) || !validDate(d.trigger.anchor) || !/(?:Z|[+-]\d\d:\d\d)$/.test(d.trigger.anchor)) errors.push('fixed-interval 需要有效 intervalHours 和带时区的 anchor');
-      if ('minIntervalHours' in d.trigger) errors.push('fixed-interval 不接受 minIntervalHours');
+      validateInterval(d.trigger, 'intervalMinutes', 'intervalHours', errors);
+      if (!validDate(d.trigger.anchor) || !/(?:Z|[+-]\d\d:\d\d)$/.test(d.trigger.anchor)) errors.push('fixed-interval 需要有效且带时区的 anchor');
+      if ('minIntervalMinutes' in d.trigger || 'minIntervalHours' in d.trigger) errors.push('fixed-interval 不接受 minIntervalMinutes / minIntervalHours');
     } else errors.push('trigger.kind 仅支持 after-settlement / fixed-interval');
   }
   if (checkKeys(d.limits, ['weeklyRuns', 'weeklySubtasks', 'maxSubtasksPerRun', 'maxExecutionMinutes', 'queueTimeoutHours'], 'limits')) {

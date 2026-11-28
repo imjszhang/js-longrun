@@ -49,6 +49,8 @@ npx --no-install js-longrun status weekly-report
 
 The current working directory is the project unless `--project` is supplied. Task IDs and data are scoped to that project; installation location is never used as the project root.
 
+Task cadence supports integer minutes starting at **5 minutes**. Set `trigger.minIntervalMinutes` for an `after-settlement` delay, or `trigger.intervalMinutes` with a timezone-qualified `anchor` for a `fixed-interval` schedule. For example, `intervalMinutes: 30` schedules half-hour slots. Existing integer-hour definitions remain supported, with exactly one unit allowed per trigger. Generated defaults retain `minIntervalHours: 72` for existing callers. This feature requires the updated runtime; published releases through `0.2.0-alpha.3` accept hour fields only. See [cadence and compatibility](docs/operation.md#definitions-and-cadence).
+
 ## Configure storage and manage the background service
 
 ```json
@@ -65,6 +67,8 @@ npx --no-install js-longrun service start
 npx --no-install js-longrun service health
 npx --no-install js-longrun service stop
 ```
+
+For five-minute tasks, set `--interval-seconds 300` during service installation. The task's interval determines its due time, and the service interval determines how often eligibility is checked. Weekly quotas still apply; `weeklyRuns` defaults to 4 and has a maximum of 1000.
 
 Install only writes a stopped deployment. Start does not enable draft tasks. Stop drains local operations without cancelling Worker tickets or stopping superagent. Projects with business routes must install their existing wrapper with `--entrypoint <absolute-file> --entry-args '[]'`. Status and health inspect stored observations without initializing the execution SDK. See [runtime management](docs/runtime-management.md) for ownership, upgrades, logs, limitations and explicit old-service migration.
 

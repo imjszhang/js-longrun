@@ -14,10 +14,28 @@ A run freezes its definition revision, brief, input contents, hashes, output lay
 
 Supported cadence:
 
-- `after-settlement`: wait `minIntervalHours` after settlement; failed work also has a delay.
-- `fixed-interval`: elapsed-hour spacing from a timezone-qualified absolute `anchor`. Missed intervals coalesce into one run, then advance to a future due time. This is not a calendar cron expression or a guarantee of a fixed local clock time across daylight-saving transitions.
+- `after-settlement`: wait `minIntervalMinutes` after settlement. Failed work also has this delay.
+- `fixed-interval`: wait `intervalMinutes` between slots measured from a timezone-qualified absolute `anchor`. Missed intervals coalesce into one run, then advance to a future due time. The interval measures elapsed time across daylight-saving transitions.
+
+Minute fields accept integers from **5 to 5,256,000**, including values such as 6 or 30. Set exactly one interval unit for the selected trigger. Legacy `minIntervalHours` and `intervalHours` remain supported as integers from 1 to 87,600. Mixed hour/minute fields are rejected, even when their durations agree. Each trigger only accepts its own interval fields, and only `fixed-interval` accepts `anchor`.
+
+For example, use either of these `trigger` objects in `task.json`:
+
+```json
+{ "kind": "after-settlement", "minIntervalMinutes": 5, "timezone": "Asia/Shanghai" }
+```
+
+```json
+{ "kind": "fixed-interval", "intervalMinutes": 30, "anchor": "2026-12-01T09:00:00+08:00", "timezone": "Asia/Shanghai" }
+```
+
+New `design`/`create` defaults retain `minIntervalHours: 72` and the existing 72-hour delay. To select a minute cadence, replace that hour field with `minIntervalMinutes`. Minute fields require a runtime with this feature; releases through `0.2.0-alpha.3` reject them. Upgrading preserves existing hour definitions and frozen run bytes. An in-flight run computes its next due time from its frozen definition. Editing the current definition or pausing/resuming does not recalculate an already saved `nextDueAt`.
+
+Configure the project's timer to check often enough for the chosen cadence. For a five-minute task, install it with `--interval-seconds 300 --open-rounds true`, then enable the task and start the service within the authorized deployment. The default timer checks hourly. Sleep, logout, an active run and quota gates can delay the next run; task cadence specifies when it becomes eligible.
 
 Each task has a timezone for its weekly quota. A research run reserves one weekly run before ticket submission; a failed submission does not create a free retry. Re-review does not consume a research-run count. Built-in local tasks set both subtask limits to zero because they cannot start managed jobs.
+
+The default `weeklyRuns` is 4 and its supported range remains 1–1000. A five-minute cadence still stops opening rounds when that quota is exhausted. Running every five minutes throughout a full week would require 2016 rounds, exceeding the current quota ceiling.
 
 Current limits are run counts and time bounds, not measured token or currency budgets. There is no account-wide billing controller. Consecutive failures pause the task after two failures. Resume clears the failure gate only for a previously authorized paused task; a disabled task must be explicitly enabled again.
 
