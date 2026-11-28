@@ -8,6 +8,7 @@ import { createTask, defaultDefinition, taskPaths, enableTask, disableTask, load
 import { planTask, startRun, collectTask, tickTask, genericStatus, verifyGeneric } from '../src/core/runtime.mjs';
 
 const day = n => new Date(Date.parse('2026-11-09T00:00:00Z') + n * 86400000);
+const minute = n => new Date(+day(0) + n * 60000);
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const hash = value => createHash('sha256').update(value).digest('hex');
 
@@ -119,6 +120,89 @@ test('weekly reservations and fixed intervals coalesce offline periods without b
   assert.equal((await f.start(day(7))).action, 'opened');
   assert.equal(loadState(f.root, f.id).week.runs, 1);
   assert.equal(f.submissions(), 2);
+});
+
+test('five and thirty minute settlement delays gate the next tick at the exact due time', async t => {
+  for (const minutes of [5, 30]) {
+    const f = await fixture(t, { mutateDefinition: d => {
+      d.trigger = { kind: 'after-settlement', minIntervalMinutes: minutes, timezone: 'UTC' };
+    } });
+    assert.equal((await tickTask({ root: f.root, id: f.id, client: f.client, now: minute(0), open: true })).action, 'opened');
+    f.writeResult();
+    assert.equal((await f.collect(minute(1))).record.status, 'settled');
+    const due = minute(1 + minutes);
+    assert.equal(loadState(f.root, f.id).nextDueAt, due.toISOString());
+    const early = await tickTask({ root: f.root, id: f.id, client: f.client, now: new Date(+due - 1), open: true });
+    assert.equal(early.action, 'hold');
+    assert.ok(early.reasons.includes('not-due'));
+    assert.equal(f.submissions(), 1);
+    assert.equal((await tickTask({ root: f.root, id: f.id, client: f.client, now: due, open: true })).action, 'opened');
+    assert.equal(f.submissions(), 2);
+  }
+});
+
+test('minute fixed intervals retain their anchor and skip missed slots after delayed settlement', async t => {
+  for (const minutes of [5, 30]) {
+    const f = await fixture(t, { mutateDefinition: d => {
+      d.trigger = { kind: 'fixed-interval', intervalMinutes: minutes, anchor: minute(0).toISOString(), timezone: 'UTC' };
+    } });
+    await f.start(); f.writeResult();
+    const settledAt = minute(minutes * 3 + 1);
+    assert.equal((await f.collect(settledAt)).record.status, 'settled');
+    assert.equal(loadState(f.root, f.id).nextDueAt, minute(minutes * 4).toISOString());
+    assert.ok((await f.start(settledAt)).reasons.includes('not-due'));
+    assert.equal((await f.start(minute(minutes * 4))).action, 'opened');
+    f.writeResult();
+    await f.collect(minute(minutes * 4));
+    assert.equal(loadState(f.root, f.id).nextDueAt, minute(minutes * 5).toISOString(), 'an exact boundary advances to the next slot');
+    assert.equal(f.submissions(), 2, 'offline intervals do not become extra runs');
+  }
+});
+
+test('legacy hour drafts settle under their frozen interval after a minute-based definition edit', async t => {
+  for (const kind of ['after-settlement', 'fixed-interval']) {
+    const f = await fixture(t, { mutateDefinition: d => {
+      d.trigger = kind === 'after-settlement'
+        ? { kind, minIntervalHours: 1, timezone: 'UTC' }
+        : { kind, intervalHours: 1, anchor: minute(0).toISOString(), timezone: 'UTC' };
+    } });
+    await f.start(); f.writeResult();
+    const draftPath = path.join(taskPaths(f.root, f.id).runs, 'R0001/draft.json');
+    const originalDraft = fs.readFileSync(draftPath);
+    const nextDefinition = structuredClone(f.definition);
+    nextDefinition.revision++;
+    nextDefinition.trigger = { kind: 'after-settlement', minIntervalMinutes: 5, timezone: 'UTC' };
+    fs.writeFileSync(taskPaths(f.root, f.id).definition, json(nextDefinition));
+    assert.equal((await f.collect(minute(1))).record.status, 'settled');
+    const due = minute(kind === 'after-settlement' ? 61 : 60);
+    assert.equal(loadState(f.root, f.id).nextDueAt, due.toISOString());
+    assert.deepEqual(fs.readFileSync(draftPath), originalDraft);
+    assert.ok((await f.start(minute(6))).reasons.includes('not-due'), 'editing does not reschedule a saved due time');
+    await f.start(due); f.writeResult();
+    await f.collect(due);
+    assert.equal(loadState(f.root, f.id).nextDueAt, new Date(+due + 5 * 60000).toISOString());
+  }
+});
+
+test('minute cadence survives partial settlement recovery using its frozen definition', async t => {
+  const f = await fixture(t, { mutateDefinition: d => {
+    d.trigger = { kind: 'after-settlement', minIntervalMinutes: 5, timezone: 'UTC' };
+  } });
+  await f.start(); f.writeResult();
+  const target = path.join(taskPaths(f.root, f.id).artifacts, 'memory.md'), rename = fs.renameSync;
+  fs.renameSync = (from, to) => {
+    if (to === target) throw new Error('minute settlement interruption');
+    return rename(from, to);
+  };
+  try { await assert.rejects(f.collect(minute(1)), /minute settlement interruption/); }
+  finally { fs.renameSync = rename; }
+  assert.equal(loadState(f.root, f.id).running.phase, 'applying');
+  fs.writeFileSync(taskPaths(f.root, f.id).definition, '{invalid future definition');
+  assert.equal((await f.collect(minute(2))).record.status, 'settled');
+  assert.equal(loadState(f.root, f.id).nextDueAt, minute(7).toISOString());
+  assert.equal((await f.collect(minute(3))).action, 'none');
+  assert.equal(loadState(f.root, f.id).nextDueAt, minute(7).toISOString());
+  assert.equal(f.submissions(), 1);
 });
 
 test('out-of-scope writes and forbidden child jobs prevent formal settlement', async t => {

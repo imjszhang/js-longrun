@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Support `minIntervalMinutes` and `intervalMinutes` for task cadence, with a five-minute minimum and exclusive hour/minute units. Keep existing integer-hour definitions and frozen runs compatible.
+- Preserve the `minIntervalHours: 72` default for existing callers. Retain saved due times and use frozen cadence during settlement and recovery.
+- Document five-minute service checks and the existing weekly quota limits. Cover minute validation, CLI creation/planning, due-time gates, missed slots and frozen-definition recovery.
+
 ## 0.2.0-alpha.3 — 2026-11-28
 
 - Keep complete v2 process identities usable when hostname lookup fails or returns no name; diagnostics no longer control identity capture or prior-boot recovery.

@@ -110,6 +110,44 @@ test('validation rejects unsupported effects, type capabilities and arbitrary ex
   assert.equal(validateDefinition(periodic).ok, false, 'ambiguous local anchor is rejected');
 });
 
+test('minute cadence accepts integer intervals from five minutes and retains legacy hours', () => {
+  assert.deepEqual(defaultDefinition('example').trigger,
+    { kind: 'after-settlement', minIntervalHours: 72, timezone: 'Asia/Shanghai' });
+  for (const kind of ['after-settlement', 'fixed-interval']) {
+    const minutesKey = kind === 'after-settlement' ? 'minIntervalMinutes' : 'intervalMinutes';
+    const hoursKey = kind === 'after-settlement' ? 'minIntervalHours' : 'intervalHours';
+    const trigger = { kind, timezone: 'UTC', ...(kind === 'fixed-interval' ? { anchor: now.toISOString() } : {}) };
+    const definition = defaultDefinition('example');
+    for (const minutes of [5, 6, 30, 60, 5_256_000]) {
+      definition.trigger = { ...trigger, [minutesKey]: minutes };
+      const before = structuredClone(definition);
+      assert.equal(validateDefinition(definition).ok, true, JSON.stringify(definition.trigger));
+      assert.deepEqual(definition, before, 'validation does not normalize persisted definitions');
+    }
+    for (const hours of [1, 72, 87600]) {
+      definition.trigger = { ...trigger, [hoursKey]: hours };
+      assert.equal(validateDefinition(definition).ok, true);
+    }
+    for (const minutes of [undefined, null, false, '5', 0, 4, 5.5, NaN, Infinity, 5_256_001]) {
+      definition.trigger = { ...trigger, [minutesKey]: minutes };
+      assert.equal(validateDefinition(definition).ok, false, String(minutes));
+    }
+    for (const hours of [0, 0.5, 1.5, 87601]) {
+      definition.trigger = { ...trigger, [hoursKey]: hours };
+      assert.equal(validateDefinition(definition).ok, false, String(hours));
+    }
+    for (const interval of [{}, { [minutesKey]: 60, [hoursKey]: 1 }, { [minutesKey]: 5, [hoursKey]: undefined }]) {
+      definition.trigger = { ...trigger, ...interval };
+      assert.equal(validateDefinition(definition).ok, false, 'requires exactly one unit');
+    }
+    const wrongKeys = kind === 'after-settlement' ? ['intervalMinutes', 'intervalHours', 'anchor'] : ['minIntervalMinutes', 'minIntervalHours'];
+    for (const key of wrongKeys) {
+      definition.trigger = { ...trigger, [minutesKey]: 5, [key]: 5 };
+      assert.equal(validateDefinition(definition).ok, false, key);
+    }
+  }
+});
+
 test('creation rejects missing inputs and existing unregistered directories without partial registry writes', async t => {
   const root = fixture(t), d = defaultDefinition('example'); d.inputs = ['missing.md'];
   await assert.rejects(create(root, 'example', { definition: d }), /ENOENT/);

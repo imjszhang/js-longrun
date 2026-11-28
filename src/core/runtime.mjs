@@ -141,8 +141,13 @@ async function startUnlocked({root,id,client,now=new Date(),kind='round',selecte
   }
 }
 function nextDue(def,now) {
-  if(def.trigger.kind==='after-settlement')return new Date(+now+def.trigger.minIntervalHours*3600000).toISOString();
-  const anchor=Date.parse(def.trigger.anchor), ms=def.trigger.intervalHours*3600000;
+  const trigger = def.trigger;
+  if (trigger.kind === 'after-settlement') {
+    const minutes = trigger.minIntervalMinutes ?? trigger.minIntervalHours * 60;
+    return new Date(+now + minutes * 60000).toISOString();
+  }
+  const anchor = Date.parse(trigger.anchor);
+  const ms = (trigger.intervalMinutes ?? trigger.intervalHours * 60) * 60000;
   return new Date(anchor+Math.max(0,Math.floor((+now-anchor)/ms)+1)*ms).toISOString();
 }
 function finish(root,id,state,frozen,outcome,now,generation={}) {

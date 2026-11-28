@@ -19,7 +19,8 @@ Status: design draft. Filling this template does not submit a ticket, enable a s
 
 ## Cadence and limits
 
-- After-settlement delay or elapsed-hour fixed interval; which timezone?
+- After-settlement delay or fixed interval in integer minutes (minimum 5); which timezone and, for fixed intervals, which timezone-qualified anchor?
+- What service check interval should apply to this cadence?
 - Per-round execution time and output-size limits?
 - Weekly run quota and queue timeout?
 - How should pauses, missed intervals and repeated failures be handled?
